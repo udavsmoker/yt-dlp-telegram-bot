@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+temp/
+*.tmp
+
+# Data files
+data/
+*.json
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+
+# IDE
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Optional npm cache
+.npm
+
+# Ensure templates/ (images + json templates) are not ignored
+# We keep the broad rules above (e.g. *.json) but explicitly allow files under templates/
+!templates/
+!templates/**
+
+# Allow template metadata and images
+!templates/**/*.json
+!templates/**/*.jpg
+!templates/**/*.jpeg
+!templates/**/*.png
+!templates/**/*.gif
+!templates/**/*.webp
+
+# If you also want to include top-level template files (rare), add:
+!templates/*.json

@@ -1,0 +1,29 @@
+{
+  "name": "classic_meme_auto",
+  "description": "Classic meme with auto-positioning (example)",
+  "image": "classic_meme",
+  "textBoxes": [
+    {
+      "maxLines": 3,
+      "fontSize": 48,
+      "fontFamily": "Impact, Arial Black, sans-serif",
+      "color": "#FFFFFF",
+      "strokeColor": "#000000",
+      "strokeWidth": 4,
+      "uppercase": true,
+      "lineHeight": 55,
+      "useSassyMessages": false
+    },
+    {
+      "maxLines": 3,
+      "fontSize": 48,
+      "fontFamily": "Impact, Arial Black, sans-serif",
+      "color": "#FFFFFF",
+      "strokeColor": "#000000",
+      "strokeWidth": 4,
+      "uppercase": true,
+      "lineHeight": 55,
+      "useSassyMessages": false
+    }
+  ]
+}

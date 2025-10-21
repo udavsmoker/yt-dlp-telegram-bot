@@ -8,20 +8,20 @@ const userRequests = new Map();
 const MAX_REQUESTS = 5;
 const WINDOW_MS = 60000;
 
-async function handleDownload(ctx) {
+async function handleDownload(ctx, next) {
   const userInfo = getUserInfo(ctx);
   const messageText = ctx.message.text;
   
   const url = extractUrl(messageText);
   
   if (!url || !isValidVideoUrl(url)) {
-    return;
+    return next();
   }
 
   const chatId = ctx.chat.id;
   if (!settingsService.isFeatureEnabled(chatId, 'videoDownload')) {
     logger.info(`Video download disabled for chat ${chatId}, ignoring URL`);
-    return;
+    return next();
   }
   
   const userId = ctx.from?.id;

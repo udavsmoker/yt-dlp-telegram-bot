@@ -51,9 +51,9 @@ bot.command('botstats', handleBotStats);
 bot.action(/^toggle_/, handleSettingsCallback);
 bot.action('settings_close', handleSettingsCallback);
 
-bot.use(markovResponseHandler);
-
 bot.on(message('text'), handleDownload);
+
+bot.use(markovResponseHandler);
 
 bot.catch((err, ctx) => {
   logger.error('Bot error:', err);

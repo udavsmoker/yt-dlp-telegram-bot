@@ -8,7 +8,7 @@ const { photoLearningMiddleware } = require('./middleware/photo.middleware');
 const handleStart = require('./handlers/start.handler');
 const handleHelp = require('./handlers/help.handler');
 const handleAbout = require('./handlers/about.handler');
-const handleDownload = require('./handlers/download.handler');
+const { handleDownload, handleYouTubeCallback } = require('./handlers/download.handler');
 const handleMeme = require('./handlers/meme.handler');
 const { handleDemotivate, handlePhotoStats } = require('./handlers/demotivator.handler');
 const { handleSettings, handleSettingsCallback } = require('./handlers/settings.handler');
@@ -50,6 +50,10 @@ bot.command('botstats', handleBotStats);
 
 bot.action(/^toggle_/, handleSettingsCallback);
 bot.action('settings_close', handleSettingsCallback);
+
+// YouTube download confirmation callbacks
+bot.action('yt_download', handleYouTubeCallback);
+bot.action('yt_cancel', handleYouTubeCallback);
 
 bot.on(message('text'), handleDownload);
 

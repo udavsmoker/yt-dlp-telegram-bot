@@ -21,6 +21,17 @@ npm install
 npm start
 ```
 
+### 4. (Optional) YouTube High Quality - Setup Cookies
+
+YouTube has implemented stricter bot protection that blocks may most automated downloads. To unlock **high-quality formats (720p, 1080p)** instead of only 360p, you need to provide browser cookies:
+[YouTube PO Token Guide - yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide)
+
+
+**Cookie lifetime:**
+- YouTube cookies typically last 1-2 weeks
+- Re-export cookies if downloads start failing
+- Run `yt-dlp -U` to update yt-dlp monthly
+
 ## Features
 - 🎬 Support for various platforms (YouTube, TikTok, Instagram, Twitter/X, etc.)
 - 🤖 AI chat responses using Markov chains

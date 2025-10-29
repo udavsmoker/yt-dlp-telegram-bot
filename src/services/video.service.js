@@ -24,33 +24,43 @@ class VideoService {
 
       const maxSizeBytes = config.download.maxFileSizeMB * 1024 * 1024;
 
+      // Determine a safe Referer based on the input URL (prevents 403 on non-YouTube sites)
+      let refererHeader = undefined;
+      try {
+        const u = new URL(url);
+        refererHeader = url;
+      } catch {}
+
+      let isYouTube = false;
+      try {
+        const host = new URL(url).hostname.toLowerCase().replace('www.', '');
+        isYouTube = host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be';
+      } catch {}
+
       // iOS/Telegram compatibility: H.264/AVC + AAC audio, excludes VP9/HEVC
-      const formatStrategies = [
-        {
-          name: 'best quality (H.264)',
-          format: 'bv*[vcodec^=avc][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][vcodec!=hvc1][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][ext=mp4]/b[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc]'
-        },
-        {
-          name: '1080p (H.264)',
-          format: 'bv*[vcodec^=avc][height<=1080][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=1080][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=1080][ext=mp4]/b[height<=1080]'
-        },
-        {
-          name: '720p (H.264)',
-          format: 'bv*[vcodec^=avc][height<=720][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=720][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=720][ext=mp4]/b[height<=720]'
-        },
-        {
-          name: '480p (H.264)',
-          format: 'bv*[vcodec^=avc][height<=480][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=480][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=480][ext=mp4]/b[height<=480]'
-        },
-        {
-          name: '360p (H.264)',
-          format: 'bv*[vcodec^=avc][height<=360][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=360][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=360][ext=mp4]/b[height<=360]'
-        },
-        {
-          name: 'worst quality',
-          format: 'wv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc]+wa/w[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc]/w'
-        }
+      // Per-platform format strategies
+      const youtubeStrategies = [
+        // Prefer HLS m3u8 numeric formats first (work well with cookies), then fall back
+        { name: '1080p (HLS)', format: '96/bestvideo*[protocol=m3u8_native][height<=1080][vcodec^=avc]+bestaudio[protocol=m3u8_native]/best*[height<=1080][ext=mp4]/22/18' },
+        { name: '720p (HLS)',  format: '95/bestvideo*[protocol=m3u8_native][height<=720][vcodec^=avc]+bestaudio[protocol=m3u8_native]/best*[height<=720][ext=mp4]/22/18' },
+        { name: '480p (HLS)',  format: '94/best*[height<=480][ext=mp4]/18' },
+        { name: '360p (HLS)',  format: '93/18' },
+        { name: '240p (HLS)',  format: '92/18' },
+        { name: 'worst quality', format: '91/18/worst' },
       ];
+
+      // Platform-agnostic strategy (Instagram, TikTok, etc.)
+      // Prefer separate streams when available, otherwise fall back to single-file MP4, then any best
+      const genericStrategies = [
+        { name: '1080p (H.264)', format: 'bestvideo*[height<=1080][vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/best*[height<=1080][ext=mp4]/best*[height<=1080]/best' },
+        { name: '720p (H.264)',  format: 'bestvideo*[height<=720][vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/best*[height<=720][ext=mp4]/best*[height<=720]/best' },
+        { name: '480p (H.264)',  format: 'bestvideo*[height<=480][vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/best*[height<=480][ext=mp4]/best*[height<=480]/best' },
+        { name: '360p (H.264)',  format: 'bestvideo*[height<=360][vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/best*[height<=360][ext=mp4]/best*[height<=360]/best' },
+        { name: '240p (H.264)',  format: 'best*[height<=240][ext=mp4]/best*[height<=240]/best' },
+        { name: 'worst quality', format: 'worst[ext=mp4]/worst' },
+      ];
+
+      const formatStrategies = isYouTube ? youtubeStrategies : genericStrategies;
 
       let downloadedFilePath = null;
       let usedQuality = null;
@@ -65,7 +75,18 @@ class VideoService {
             } catch {}
           }
 
-          await youtubedl(url, {
+          // Check if cookies file exists for YouTube authentication
+          const cookiesPath = path.join(__dirname, '../../cookies.txt');
+          let useCookies = false;
+          try {
+            await fs.access(cookiesPath);
+            useCookies = true;
+            logger.info('Using cookies.txt for authentication');
+          } catch {
+            logger.debug('No cookies.txt found, using legacy formats only');
+          }
+
+          const ytdlpOptions = {
             output: outputTemplate,
             format: strategy.format,
             mergeOutputFormat: 'mp4',
@@ -75,7 +96,28 @@ class VideoService {
             addMetadata: true,
             writeThumbnail: true,
             convertThumbnails: 'jpg',
-          });
+            // Add realistic headers to bypass bot detection
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            // Set referer dynamically to the source URL to avoid 403 on sites like Instagram
+            ...(refererHeader ? { referer: refererHeader } : {}),
+            // Enable HLS/m3u8 native downloader (required for YouTube m3u8 formats)
+            hlsPreferNative: true,
+            externalDownloader: 'native',
+            // Use aggressive retries for network errors
+            retries: 10,
+            fragmentRetries: 10,
+            // Skip unavailable fragments (livestreams)
+            skipUnavailableFragments: true,
+            // Bypass age restriction
+            ageLimit: 0,
+          };
+
+          // Add cookies if available (best solution for YouTube 403 errors)
+          if (useCookies) {
+            ytdlpOptions.cookies = cookiesPath;
+          }
+
+          await youtubedl(url, ytdlpOptions);
 
           const files = await fs.readdir(config.download.tempDir);
           const downloadedFile = files.find(f => 

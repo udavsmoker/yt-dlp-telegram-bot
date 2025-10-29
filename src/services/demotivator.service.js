@@ -107,30 +107,30 @@ class DemotivatorService {
    */
   async renderDemotivator(sourceImage, text1, text2 = null) {
     try {
-      // Demotivator dimensions - more compact with less bottom space
-      const canvasWidth = 800;
-      const canvasHeight = 620; // Reduced from 700 to 620 (less bottom space)
+      // Demotivator dimensions - FIXED SQUARE CANVAS
+      const canvasSize = 800;
       
-      // ============= BORDER SETTINGS (edit these!) =============
-      const outerBorder = 20;        // Space from canvas edge to white border
-      const whiteBorder = 2;         // White border thickness
-      const innerBlackBorder = 4;    // Black margin between white border and image
-      // ========================================================
+      // Border settings
+      const outerBorder = 30;
+      const whiteBorder = 2;
+      const innerBlackBorder = 10;
+      // Fixed SQUARE image area - image will be stretched to this size
+      const imageSize = canvasSize - (outerBorder * 2) - (whiteBorder * 2) - (innerBlackBorder * 2) - 20;
       
-      // Fixed image area - stretch to fit
-      const imageWidth = canvasWidth - (outerBorder * 2) - (whiteBorder * 2) - (innerBlackBorder * 2) - 20;
-      const imageHeight = 450; // Fixed height for consistent look
+      // Text area (below image)
+      const textAreaHeight = 150; // Reserved space for text
+      const totalCanvasHeight = canvasSize + textAreaHeight;
       
       // Create canvas
-      const canvas = createCanvas(canvasWidth, canvasHeight);
+      const canvas = createCanvas(canvasSize, totalCanvasHeight);
       const ctx = canvas.getContext('2d');
       
       // Fill black background
       ctx.fillStyle = '#000000';
-      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      ctx.fillRect(0, 0, canvasSize, totalCanvasHeight);
       
-      // Calculate image position (centered)
-      const imageX = (canvasWidth - imageWidth) / 2;
+      // Calculate image position (centered horizontally, near top)
+      const imageX = (canvasSize - imageSize) / 2;
       const imageY = outerBorder + 10;
       
       // Draw white border around image
@@ -138,8 +138,8 @@ class DemotivatorService {
       ctx.fillRect(
         imageX - whiteBorder - innerBlackBorder,
         imageY - whiteBorder - innerBlackBorder,
-        imageWidth + (whiteBorder * 2) + (innerBlackBorder * 2),
-        imageHeight + (whiteBorder * 2) + (innerBlackBorder * 2)
+        imageSize + (whiteBorder * 2) + (innerBlackBorder * 2),
+        imageSize + (whiteBorder * 2) + (innerBlackBorder * 2)
       );
       
       // Draw inner black border (creates margin)
@@ -147,47 +147,45 @@ class DemotivatorService {
       ctx.fillRect(
         imageX - innerBlackBorder,
         imageY - innerBlackBorder,
-        imageWidth + (innerBlackBorder * 2),
-        imageHeight + (innerBlackBorder * 2)
+        imageSize + (innerBlackBorder * 2),
+        imageSize + (innerBlackBorder * 2)
       );
       
-      // Draw the image (stretched to fit the template size)
-      ctx.drawImage(sourceImage, imageX, imageY, imageWidth, imageHeight);
+      // Draw the image STRETCHED to SQUARE
+      ctx.drawImage(sourceImage, imageX, imageY, imageSize, imageSize);
       
-      // Draw text below image
-      let textY = imageY + imageHeight + 40;
-      const textMaxWidth = canvasWidth - (outerBorder * 2) - 40;
+      // Draw text below image with dynamic sizing
+      let textY = imageY + imageSize + 40;
+      const textMaxWidth = canvasSize - (outerBorder * 2) - 40;
       
-      // Draw first text (bigger, main text)
-      const lines1 = this.wrapText(ctx, text1, textMaxWidth, 36);
-      ctx.font = '36px "Times New Roman"';
+      // Draw first text (bigger, main text) with dynamic font sizing
+      const { fontSize: fontSize1, lines: lines1 } = this.fitText(ctx, text1, textMaxWidth, textAreaHeight * 0.6, 36, 20, 2);
+      
+      ctx.font = `${fontSize1}px "Times New Roman"`;
       ctx.fillStyle = '#FFFFFF';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       
-      const lineHeight1 = 42;
-      const maxLines1 = 2;
-      const linesToDraw1 = lines1.slice(0, maxLines1);
+      const lineHeight1 = fontSize1 + 6;
       
-      linesToDraw1.forEach((line, index) => {
+      lines1.forEach((line, index) => {
         const y = textY + (index * lineHeight1);
-        ctx.fillText(line, canvasWidth / 2, y);
+        ctx.fillText(line, canvasSize / 2, y);
       });
       
-      // Draw second text if provided (smaller, subtitle)
+      // Draw second text if provided (smaller, subtitle) with dynamic sizing
       if (text2) {
-        textY += linesToDraw1.length * lineHeight1 + 10; // Add spacing
-        const lines2 = this.wrapText(ctx, text2, textMaxWidth, 24);
-        ctx.font = '24px "Times New Roman"';
-        ctx.fillStyle = '#AAAAAA'; // Lighter gray color
+        textY += lines1.length * lineHeight1 + 10; // Add spacing
+        const { fontSize: fontSize2, lines: lines2 } = this.fitText(ctx, text2, textMaxWidth, textAreaHeight * 0.4, 24, 16, 2);
         
-        const lineHeight2 = 28;
-        const maxLines2 = 2;
-        const linesToDraw2 = lines2.slice(0, maxLines2);
+        ctx.font = `${fontSize2}px "Times New Roman"`;
+        ctx.fillStyle = '#ffffffff'; // Lighter gray color
         
-        linesToDraw2.forEach((line, index) => {
+        const lineHeight2 = fontSize2 + 4;
+        
+        lines2.forEach((line, index) => {
           const y = textY + (index * lineHeight2);
-          ctx.fillText(line, canvasWidth / 2, y);
+          ctx.fillText(line, canvasSize / 2, y);
         });
       }
       
@@ -206,6 +204,47 @@ class DemotivatorService {
       logger.error('Failed to render demotivator:', error);
       throw error;
     }
+  }
+
+  /**
+   * Dynamically fit text by reducing font size until it fits within constraints
+   * @param {CanvasRenderingContext2D} ctx - Canvas context
+   * @param {string} text - Text to fit
+   * @param {number} maxWidth - Maximum width for text
+   * @param {number} maxHeight - Maximum height for text block
+   * @param {number} startFontSize - Starting font size
+   * @param {number} minFontSize - Minimum font size to try
+   * @param {number} maxLines - Maximum number of lines
+   * @returns {{fontSize: number, lines: string[]}}
+   */
+  fitText(ctx, text, maxWidth, maxHeight, startFontSize, minFontSize, maxLines) {
+    let fontSize = startFontSize;
+    let lines = [];
+    
+    // Try progressively smaller font sizes until text fits
+    while (fontSize >= minFontSize) {
+      ctx.font = `${fontSize}px "Times New Roman"`;
+      lines = this.wrapText(ctx, text, maxWidth, fontSize);
+      
+      // Check if it fits within maxLines
+      if (lines.length <= maxLines) {
+        const lineHeight = fontSize + 6;
+        const totalHeight = lines.length * lineHeight;
+        
+        // Check if total height fits
+        if (totalHeight <= maxHeight) {
+          return { fontSize, lines };
+        }
+      }
+      
+      // Reduce font size and try again
+      fontSize -= 2;
+    }
+    
+    // If still doesn't fit, truncate to maxLines at minimum font size
+    ctx.font = `${minFontSize}px "Times New Roman"`;
+    lines = this.wrapText(ctx, text, maxWidth, minFontSize);
+    return { fontSize: minFontSize, lines: lines.slice(0, maxLines) };
   }
 
   /**

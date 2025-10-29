@@ -21,6 +21,9 @@ temp/
 data/
 *.json
 
+# Authentication cookies (sensitive)
+cookies.txt
+
 # OS files
 .DS_Store
 .DS_Store?

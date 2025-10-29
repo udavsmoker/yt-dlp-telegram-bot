@@ -79,6 +79,19 @@ async function isTikTokUrl(url) {
   }
 }
 
+function isYouTubeUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    const hostname = urlObj.hostname.toLowerCase().replace('www.', '');
+    
+    return hostname === 'youtube.com' || 
+           hostname.endsWith('.youtube.com') || 
+           hostname === 'youtu.be';
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
   extractUrl,
   ensureDir,
@@ -87,5 +100,6 @@ module.exports = {
   getUserInfo,
   isValidVideoUrl,
   isTikTokPhotoUrl,
-  isTikTokUrl
+  isTikTokUrl,
+  isYouTubeUrl
 };

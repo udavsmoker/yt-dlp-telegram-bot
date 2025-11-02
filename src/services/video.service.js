@@ -50,14 +50,14 @@ class VideoService {
       ];
 
       // Platform-agnostic strategy (Instagram, TikTok, etc.)
-      // Prefer separate streams when available, otherwise fall back to single-file MP4, then any best
+      // Explicitly merge video+audio streams, exclude VP9/HEVC codecs
       const genericStrategies = [
-        { name: '1080p (H.264)', format: 'bestvideo*[height<=1080][vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/best*[height<=1080][ext=mp4]/best*[height<=1080]/best' },
-        { name: '720p (H.264)',  format: 'bestvideo*[height<=720][vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/best*[height<=720][ext=mp4]/best*[height<=720]/best' },
-        { name: '480p (H.264)',  format: 'bestvideo*[height<=480][vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/best*[height<=480][ext=mp4]/best*[height<=480]/best' },
-        { name: '360p (H.264)',  format: 'bestvideo*[height<=360][vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]/best*[height<=360][ext=mp4]/best*[height<=360]/best' },
-        { name: '240p (H.264)',  format: 'best*[height<=240][ext=mp4]/best*[height<=240]/best' },
-        { name: 'worst quality', format: 'worst[ext=mp4]/worst' },
+        { name: 'best quality (H.264)', format: 'bv*[vcodec^=avc][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][vcodec!=hvc1][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][ext=mp4]/b[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc]' },
+        { name: '1080p (H.264)', format: 'bv*[vcodec^=avc][height<=1080][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=1080][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=1080][ext=mp4]/b[height<=1080]' },
+        { name: '720p (H.264)', format: 'bv*[vcodec^=avc][height<=720][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=720][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=720][ext=mp4]/b[height<=720]' },
+        { name: '480p (H.264)', format: 'bv*[vcodec^=avc][height<=480][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=480][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=480][ext=mp4]/b[height<=480]' },
+        { name: '360p (H.264)', format: 'bv*[vcodec^=avc][height<=360][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=360][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=360][ext=mp4]/b[height<=360]' },
+        { name: 'worst quality', format: 'wv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc]+wa/w[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc]/w' },
       ];
 
       const formatStrategies = isYouTube ? youtubeStrategies : genericStrategies;

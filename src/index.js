@@ -24,7 +24,9 @@ if (!config.botToken) {
   process.exit(1);
 }
 
-const bot = new Telegraf(config.botToken);
+const bot = new Telegraf(config.botToken, {
+  handlerTimeout: 300000 // 5 minutes for slow downloads
+});
 
 bot.use(errorHandler());
 bot.use(loggingMiddleware());

@@ -68,7 +68,7 @@ function isTikTokPhotoUrl(url) {
   }
 }
 
-async function isTikTokUrl(url) {
+function isTikTokUrl(url) {
   try {
     const urlObj = new URL(url);
     const hostname = urlObj.hostname.toLowerCase().replace('www.', '');

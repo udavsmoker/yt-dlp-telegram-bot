@@ -32,15 +32,16 @@ class VideoService {
       } catch {}
 
       let isYouTube = false;
+      let usesHLS = false;
       try {
         const host = new URL(url).hostname.toLowerCase().replace('www.', '');
         isYouTube = host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be';
+        usesHLS = host.includes('hub.com') || host.includes('videos.') || host.includes('video.');
       } catch {}
 
       // iOS/Telegram compatibility: H.264/AVC + AAC audio, excludes VP9/HEVC
       // Per-platform format strategies
       const youtubeStrategies = [
-        // Prefer HLS m3u8 numeric formats first (work well with cookies), then fall back
         { name: '1080p (HLS)', format: '96/bestvideo*[protocol=m3u8_native][height<=1080][vcodec^=avc]+bestaudio[protocol=m3u8_native]/best*[height<=1080][ext=mp4]/22/18' },
         { name: '720p (HLS)',  format: '95/bestvideo*[protocol=m3u8_native][height<=720][vcodec^=avc]+bestaudio[protocol=m3u8_native]/best*[height<=720][ext=mp4]/22/18' },
         { name: '480p (HLS)',  format: '94/best*[height<=480][ext=mp4]/18' },
@@ -49,18 +50,23 @@ class VideoService {
         { name: 'worst quality', format: '91/18/worst' },
       ];
 
-      // Platform-agnostic strategy (Instagram, TikTok, etc.)
-      // Explicitly merge video+audio streams, exclude VP9/HEVC codecs
-      const genericStrategies = [
-        { name: 'best quality (H.264)', format: 'bv*[vcodec^=avc][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][vcodec!=hvc1][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][ext=mp4]/b[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc]' },
-        { name: '1080p (H.264)', format: 'bv*[vcodec^=avc][height<=1080][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=1080][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=1080][ext=mp4]/b[height<=1080]' },
-        { name: '720p (H.264)', format: 'bv*[vcodec^=avc][height<=720][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=720][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=720][ext=mp4]/b[height<=720]' },
-        { name: '480p (H.264)', format: 'bv*[vcodec^=avc][height<=480][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=480][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=480][ext=mp4]/b[height<=480]' },
-        { name: '360p (H.264)', format: 'bv*[vcodec^=avc][height<=360][ext=mp4]+ba[acodec^=mp4a][ext=m4a]/bv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc][height<=360][ext=mp4]+ba[ext=m4a]/b[vcodec^=avc][height<=360][ext=mp4]/b[height<=360]' },
-        { name: 'worst quality', format: 'wv*[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc]+wa/w[vcodec!=vp9][vcodec!=vp09][vcodec!=hevc]/w' },
+      const hlsStrategies = [
+        { name: 'best available', format: 'bv*+ba/b' },
+        { name: '1080p or lower', format: 'bv*[height<=1080]+ba/b[height<=1080]' },
+        { name: '720p or lower', format: 'bv*[height<=720]+ba/b[height<=720]' },
+        { name: '480p or lower', format: 'bv*[height<=480]+ba/b[height<=480]' },
+        { name: 'worst', format: 'wv*+wa/w' },
       ];
 
-      const formatStrategies = isYouTube ? youtubeStrategies : genericStrategies;
+      const genericStrategies = [
+        { name: 'best mp4 direct', format: 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best' },
+        { name: '1080p max', format: 'bestvideo[height<=1080][ext=mp4]+bestaudio/best[height<=1080]' },
+        { name: '720p max', format: 'bestvideo[height<=720][ext=mp4]+bestaudio/best[height<=720]' },
+        { name: '480p max', format: 'bestvideo[height<=480][ext=mp4]+bestaudio/best[height<=480]' },
+        { name: 'worst quality', format: 'worst' },
+      ];
+
+      const formatStrategies = isYouTube ? youtubeStrategies : usesHLS ? hlsStrategies : genericStrategies;
 
       let downloadedFilePath = null;
       let usedQuality = null;
@@ -96,20 +102,15 @@ class VideoService {
             addMetadata: true,
             writeThumbnail: true,
             convertThumbnails: 'jpg',
-            // Add realistic headers to bypass bot detection
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            // Set referer dynamically to the source URL to avoid 403 on sites like Instagram
             ...(refererHeader ? { referer: refererHeader } : {}),
-            // Enable HLS/m3u8 native downloader (required for YouTube m3u8 formats)
             hlsPreferNative: true,
             externalDownloader: 'native',
-            // Use aggressive retries for network errors
-            retries: 10,
-            fragmentRetries: 10,
+            // Use reduced retries for HLS-heavy sites (slower metadata extraction)
+            retries: usesHLS ? 3 : 10,
+            fragmentRetries: usesHLS ? 3 : 10,
             // Skip unavailable fragments (livestreams)
             skipUnavailableFragments: true,
-            // Bypass age restriction
-            ageLimit: 0,
           };
 
           // Add cookies if available (best solution for YouTube 403 errors)
@@ -117,7 +118,31 @@ class VideoService {
             ytdlpOptions.cookies = cookiesPath;
           }
 
-          await youtubedl(url, ytdlpOptions);
+          let downloadOutput;
+          try {
+            downloadOutput = await youtubedl(url, ytdlpOptions);
+            if (downloadOutput) {
+              logger.debug(`yt-dlp output for ${strategy.name}: ${JSON.stringify(downloadOutput).substring(0, 200)}`);
+            }
+          } catch (ytdlpError) {
+            // Log yt-dlp errors but continue to next strategy
+            const errorMsg = ytdlpError.message || '';
+            const stderr = ytdlpError.stderr || '';
+            
+            logger.warn(`yt-dlp failed with ${strategy.name}: ${errorMsg}`);
+            
+            // Check for specific error types
+            if (stderr.includes('Failed to resolve') || stderr.includes('Temporary failure in name resolution')) {
+              logger.error('DNS resolution failed - network or firewall may be blocking access');
+            } else if (stderr.includes('Unable to download webpage')) {
+              logger.error('Cannot connect to site - may be blocked by firewall or ISP');
+            }
+            
+            if (stderr) {
+              logger.debug(`yt-dlp stderr: ${stderr.substring(0, 500)}`);
+            }
+            continue;
+          }
 
           const files = await fs.readdir(config.download.tempDir);
           const downloadedFile = files.find(f => 
@@ -126,6 +151,7 @@ class VideoService {
           );
 
           if (!downloadedFile) {
+            logger.warn(`Download completed but no file found for ${strategy.name}`);
             continue;
           }
 
@@ -290,6 +316,8 @@ class VideoService {
         throw new Error('Video is unavailable or has been removed');
       } else if (error.message.includes('too large to send via Telegram')) {
         throw error;
+      } else if (error.message.includes('Downloaded file not found')) {
+        throw new Error('Download failed - no video file was created. This may be caused by:\n• Site blocking automated downloads\n• Network/firewall blocking access\n• Rate limiting\n• Unsupported video format\n\nPlease try again later or use a different video.');
       }
       
       throw new Error(`Download failed: ${error.message}`);

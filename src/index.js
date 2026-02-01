@@ -5,6 +5,7 @@ const logger = require('./utils/logger');
 const { loggingMiddleware, errorHandler, rateLimiter } = require('./middleware');
 const { markovLearningMiddleware, markovResponseHandler } = require('./middleware/markov.middleware');
 const { photoLearningMiddleware } = require('./middleware/photo.middleware');
+const { blacklistCheckMiddleware } = require('./middleware/blacklist.middleware');
 const handleStart = require('./handlers/start.handler');
 const handleHelp = require('./handlers/help.handler');
 const handleAbout = require('./handlers/about.handler');
@@ -13,6 +14,7 @@ const handleMeme = require('./handlers/meme.handler');
 const { handleDemotivate, handlePhotoStats } = require('./handlers/demotivator.handler');
 const { handleSettings, handleSettingsCallback } = require('./handlers/settings.handler');
 const { handleSetLaziness, handleSetCoherence, handleSetSassiness, handleBotStats } = require('./handlers/markov.handler');
+const { handleBlacklist } = require('./handlers/blacklist.handler');
 const settingsService = require('./services/settings.service');
 const memeService = require('./services/meme.service');
 const demotivatorService = require('./services/demotivator.service');
@@ -25,11 +27,17 @@ if (!config.botToken) {
 }
 
 const bot = new Telegraf(config.botToken, {
-  handlerTimeout: 300000 // 5 minutes for slow downloads
+  handlerTimeout: 300000, // 5 minutes for slow downloads
+  telegram: {
+    apiRoot: config.botApiUrl || 'https://api.telegram.org'
+  }
 });
 
 bot.use(errorHandler());
 bot.use(loggingMiddleware());
+
+// Blacklist check - must be before commands
+bot.use(blacklistCheckMiddleware());
 
 bot.use(markovLearningMiddleware);
 bot.use(photoLearningMiddleware);
@@ -49,6 +57,8 @@ bot.command('setlaziness', handleSetLaziness);
 bot.command('setcoherence', handleSetCoherence);
 bot.command('setsassiness', handleSetSassiness);
 bot.command('botstats', handleBotStats);
+
+bot.command('blacklist', handleBlacklist);
 
 bot.action(/^toggle_/, handleSettingsCallback);
 bot.action('settings_close', handleSettingsCallback);
@@ -94,6 +104,14 @@ async function startBot() {
     
     logger.info('Starting bot...');
     logger.info('Using yt-dlp for video downloads');
+    
+    if (config.botApiUrl) {
+      logger.info(`Using local Bot API server: ${config.botApiUrl}`);
+      logger.info(`Max file size: ${config.download.maxFileSizeMB}MB`);
+    } else {
+      logger.info('Using official Telegram Bot API');
+      logger.info(`Max file size: ${config.download.maxFileSizeMB}MB`);
+    }
     
     if (config.webhook.domain) {
       await bot.launch({

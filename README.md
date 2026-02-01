@@ -21,9 +21,37 @@ npm install
 npm start
 ```
 
-### 4. (Optional) YouTube High Quality - Setup Cookies
+### 4. (Required for YouTube) Setup PO Token Server
 
-YouTube has implemented stricter bot protection that blocks may most automated downloads. To unlock **high-quality formats (720p, 1080p)** instead of only 360p, you need to provide browser cookies:
+YouTube now requires a Proof-of-Origin (PO) token to download videos. Without it, you'll get 403 Forbidden errors on all formats.
+
+**Install the bgutil PO Token provider:**
+
+```bash
+# Install the yt-dlp plugin
+pip install -U bgutil-ytdlp-pot-provider
+
+# Clone and build the server
+cd ~
+git clone --single-branch --branch 1.2.2 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git
+cd bgutil-ytdlp-pot-provider/server/
+npm install
+npx tsc
+
+# Start the server (keep it running in a screen/tmux session)
+node build/main.js
+```
+
+**Run it in a screen session (recommended):**
+```bash
+screen -dmS bgutil bash -c 'cd ~/bgutil-ytdlp-pot-provider/server && node build/main.js'
+```
+
+The server listens on `http://127.0.0.1:4416` by default. The yt-dlp plugin automatically connects to it.
+
+### 5. (Optional) YouTube Cookies for Higher Quality
+
+For the best quality (720p+), you can also provide browser cookies:
 [YouTube PO Token Guide - yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide)
 
 

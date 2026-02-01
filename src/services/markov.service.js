@@ -99,24 +99,27 @@ class MarkovService {
           
           if (similarMessages.length > 5) {
             // Build temporary model with similar messages for better context
-            const contextMarkov = new Markov({
-              stateSize: settings.markov_order,
-              maxTries: 50
+            // v2 API: data passed to constructor
+            const contextMarkov = new Markov(similarMessages, {
+              stateSize: settings.markov_order
             });
-            
-            contextMarkov.addData(similarMessages);
             
             try {
               contextMarkov.buildCorpus();
               const generated = contextMarkov.generate({
-                maxTries: 50,
+                maxTries: 100,
                 filter: (result) => {
-                  return result.string.split(' ').length >= 3 && result.string.length <= 200;
+                  // Prefer original combinations (score > 0), not exact copies
+                  // refs.length > 1 means text was combined from multiple sources
+                  const isOriginal = result.score > 0 || result.refs.length > 1;
+                  const goodLength = result.string.split(' ').length >= 3 && result.string.length <= 200;
+                  return isOriginal && goodLength;
                 }
               });
               
               if (generated && generated.string) {
                 result = generated.string;
+                logger.debug(`Context Markov generated (score: ${generated.score}, refs: ${generated.refs.length}): ${result.substring(0, 50)}...`);
               }
             } catch (err) {
               logger.debug(`Context-based generation failed: ${err.message}`);
@@ -129,16 +132,32 @@ class MarkovService {
 
       // Fallback to general Markov generation
       if (!result) {
-        const generated = markov.generate({
-          maxTries: 100,
+        // First try: prefer original combinations (score > 0)
+        let generated = markov.generate({
+          maxTries: 200,
           filter: (result) => {
-            // Filter: reasonable length, not too short
-            return result.string.split(' ').length >= 3 && result.string.length <= 200;
+            // Prefer original combinations (score > 0), not exact copies
+            // refs.length > 1 means text was combined from multiple sources
+            const isOriginal = result.score > 0 || result.refs.length > 1;
+            const goodLength = result.string.split(' ').length >= 3 && result.string.length <= 200;
+            return isOriginal && goodLength;
           }
         });
 
+        // If no original combination found, allow exact copies as fallback
+        if (!generated) {
+          logger.debug('No original Markov combination found, falling back to any result');
+          generated = markov.generate({
+            maxTries: 50,
+            filter: (result) => {
+              return result.string.split(' ').length >= 3 && result.string.length <= 200;
+            }
+          });
+        }
+
         if (generated && generated.string) {
           result = generated.string;
+          logger.info(`Markov generated (score: ${generated.score}, refs: ${generated.refs.length}): ${result.substring(0, 50)}...`);
         }
       }
 
@@ -169,8 +188,8 @@ class MarkovService {
       // Build new model
       const messages = markovDb.getMessagesForTraining(chatId, 10000);
       
-      if (messages.length < 20) {
-        logger.warn(`Not enough messages to build Markov model for chat ${chatId}`);
+      if (!messages || !Array.isArray(messages) || messages.length < 20) {
+        logger.warn(`Not enough messages to build Markov model for chat ${chatId} (got ${messages?.length || 0})`);
         return null;
       }
 
@@ -181,28 +200,17 @@ class MarkovService {
         return null;
       }
 
-      let markov = new Markov({
-        stateSize: settings.markov_order,
-        maxTries: 50
-      });
-
-      // Try building corpus using plain strings first
+      // v2 API: data passed to constructor, not via addData()
+      let markov;
+      
       try {
-        markov.addData(cleanMessages);
+        markov = new Markov(cleanMessages, {
+          stateSize: settings.markov_order
+        });
         markov.buildCorpus();
       } catch (err) {
-        logger.warn(`Failed to build Markov corpus with string data: ${err && err.message ? err.message : err}`);
-        // Fallback: try using object format { string: ... } which some datasets require
-        try {
-          const objData = cleanMessages.map(s => ({ string: s }));
-          const alt = new Markov({ stateSize: settings.markov_order, maxTries: 50 });
-          alt.addData(objData);
-          alt.buildCorpus();
-          markov = alt;
-        } catch (err2) {
-          logger.error(`Failed to build Markov corpus with object data: ${err2 && err2.message ? err2.message : err2}`);
-          return null;
-        }
+        logger.error(`Failed to build Markov corpus: ${err && err.message ? err.message : err}`);
+        return null;
       }
 
       // Cache the model

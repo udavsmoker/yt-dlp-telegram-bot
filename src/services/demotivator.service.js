@@ -53,12 +53,30 @@ class DemotivatorService {
         throw new Error('Telegram API instance required for downloading photos');
       }
 
-      const fileLink = await telegram.getFileLink(photoData.file_id);
-      const response = await axios.get(fileLink.href, { responseType: 'arraybuffer' });
+      let photoBuffer;
+      try {
+        // Get file info
+        const file = await telegram.getFile(photoData.file_id);
+        
+        // Check if using local Bot API server (file_path is absolute path)
+        if (file.file_path && file.file_path.startsWith('/')) {
+          // Local Bot API server - read directly from filesystem
+          logger.debug(`Reading photo from local Bot API server: ${file.file_path}`);
+          photoBuffer = await fs.readFile(file.file_path);
+        } else {
+          // Official Telegram API - download from CDN
+          const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+          logger.debug(`Downloading photo from Telegram CDN: ${fileUrl}`);
+          const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+          photoBuffer = response.data;
+        }
+      } catch (downloadError) {
+        throw new Error(`Failed to download photo: ${downloadError.message}`);
+      }
       
       // Save temporary image
       tempImagePath = path.join(this.tempDir, `demotivator_temp_${Date.now()}_${Math.random().toString(36).substr(2, 6)}.jpg`);
-      await fs.writeFile(tempImagePath, response.data);
+      await fs.writeFile(tempImagePath, photoBuffer);
 
       // Load the image
       const sourceImage = await loadImage(tempImagePath);

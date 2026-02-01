@@ -21,6 +21,7 @@ class PhotoDatabaseService {
           user_id TEXT NOT NULL,
           file_id TEXT NOT NULL,
           file_unique_id TEXT NOT NULL,
+          file_path TEXT,
           width INTEGER,
           height INTEGER,
           file_size INTEGER,

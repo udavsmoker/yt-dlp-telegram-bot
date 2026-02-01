@@ -11,6 +11,7 @@ class SettingsService {
       markovResponses: false,
       memeGeneration: false,
       demotivatorsEnabled: false,
+      blacklistEnabled: true,
       // Add more toggleable features here in the future:
       // tiktokSlideshow: true,
       // autoDelete: false,
@@ -114,6 +115,10 @@ class SettingsService {
       demotivatorsEnabled: {
         name: '🖼️ Demotivators',
         description: 'Create Russian-style demotivators from chat photos and messages'
+      },
+      blacklistEnabled: {
+        name: '🚫 Blacklist System',
+        description: 'Block specific users from using bot commands (admin only)'
       },
       // Add more features here as you build them:
       // tiktokSlideshow: {

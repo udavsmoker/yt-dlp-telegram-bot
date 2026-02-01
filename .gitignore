@@ -58,3 +58,15 @@ Thumbs.db
 
 # If you also want to include top-level template files (rare), add:
 !templates/*.json
+
+# Local domains config
+local-domains.json
+
+# Telegram Bot API local server files
+*.binlog
+*/td.binlog
+*/photos/
+*/temp/
+
+# Bot token folders (local API server data)
+[0-9]*:*/

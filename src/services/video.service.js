@@ -1,10 +1,23 @@
-const youtubedl = require('youtube-dl-exec');
+const youtubedlExec = require('youtube-dl-exec');
 const path = require('path');
 const fs = require('fs').promises;
 const { generateFilename, ensureDir } = require('../utils/helpers');
 const config = require('../config');
 const logger = require('../utils/logger');
 const tiktokService = require('./tiktok.service');
+const instagramService = require('./instagram.service');
+
+// Load extra patterns from local config (gitignored)
+let localConfig = { extraDomains: [], hlsPatterns: [], problematicPatterns: [] };
+try {
+  const configPath = path.join(__dirname, '../../local-domains.json');
+  localConfig = require(configPath);
+} catch (e) {
+  // Local config doesn't exist, that's fine
+}
+
+// Use system yt-dlp (with PO Token plugin) instead of bundled one
+const youtubedl = youtubedlExec.create(process.env.YTDLP_PATH || '/home/udav/.local/bin/yt-dlp');
 
 class VideoService {
   constructor() {
@@ -32,22 +45,29 @@ class VideoService {
       } catch {}
 
       let isYouTube = false;
+      let isTikTok = false;
       let usesHLS = false;
+      let isProblematicSite = false; // Sites with filename issues
       try {
         const host = new URL(url).hostname.toLowerCase().replace('www.', '');
         isYouTube = host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be';
-        usesHLS = host.includes('hub.com') || host.includes('videos.') || host.includes('video.');
+        isTikTok = host === 'tiktok.com' || host.endsWith('.tiktok.com') || host === 'vm.tiktok.com' || host === 'vt.tiktok.com';
+        // HLS patterns from local config (for sites that need special handling)
+        const hlsPatterns = localConfig.hlsPatterns || [];
+        usesHLS = hlsPatterns.some(pattern => host.includes(pattern));
+        // Problematic sites from local config (filename issues)
+        const problematicPatterns = localConfig.problematicPatterns || [];
+        isProblematicSite = problematicPatterns.some(pattern => host.includes(pattern));
       } catch {}
 
       // iOS/Telegram compatibility: H.264/AVC + AAC audio, excludes VP9/HEVC
-      // Per-platform format strategies
+      // YouTube strategies: Use android_sdkless client for direct HTTPS formats (no HLS 403 errors)
+      // Format 22 = 720p mp4, 18 = 360p mp4 (progressive, reliable with android_sdkless)
       const youtubeStrategies = [
-        { name: '1080p (HLS)', format: '96/bestvideo*[protocol=m3u8_native][height<=1080][vcodec^=avc]+bestaudio[protocol=m3u8_native]/best*[height<=1080][ext=mp4]/22/18' },
-        { name: '720p (HLS)',  format: '95/bestvideo*[protocol=m3u8_native][height<=720][vcodec^=avc]+bestaudio[protocol=m3u8_native]/best*[height<=720][ext=mp4]/22/18' },
-        { name: '480p (HLS)',  format: '94/best*[height<=480][ext=mp4]/18' },
-        { name: '360p (HLS)',  format: '93/18' },
-        { name: '240p (HLS)',  format: '92/18' },
-        { name: 'worst quality', format: '91/18/worst' },
+        { name: 'best available', format: 'b/best' },
+        { name: '720p mp4', format: '22/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/18' },
+        { name: '360p mp4', format: '18/best[height<=360][ext=mp4]/worst[ext=mp4]' },
+        { name: 'worst quality', format: 'worst' },
       ];
 
       const hlsStrategies = [
@@ -81,16 +101,10 @@ class VideoService {
             } catch {}
           }
 
-          // Check if cookies file exists for YouTube authentication
-          const cookiesPath = path.join(__dirname, '../../cookies.txt');
-          let useCookies = false;
-          try {
-            await fs.access(cookiesPath);
-            useCookies = true;
-            logger.info('Using cookies.txt for authentication');
-          } catch {
-            logger.debug('No cookies.txt found, using legacy formats only');
-          }
+          // Note: cookies.txt is no longer used
+          // - YouTube: uses android_sdkless client (doesn't support cookies)
+          // - TikTok: cookies break the extractor
+          // - Other sites: work fine without cookies
 
           const ytdlpOptions = {
             output: outputTemplate,
@@ -99,9 +113,12 @@ class VideoService {
             noWarnings: true,
             noCheckCertificates: true,
             preferFreeFormats: true,
-            addMetadata: true,
+            // Disable metadata to prevent postprocessing errors with special chars
+            noPostOverwrites: true,
             writeThumbnail: true,
             convertThumbnails: 'jpg',
+            restrictFilenames: true,
+            windowsFilenames: true, // Extra-strict filename sanitization (works on all OSes)
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             ...(refererHeader ? { referer: refererHeader } : {}),
             hlsPreferNative: true,
@@ -113,9 +130,16 @@ class VideoService {
             skipUnavailableFragments: true,
           };
 
-          // Add cookies if available (best solution for YouTube 403 errors)
-          if (useCookies) {
-            ytdlpOptions.cookies = cookiesPath;
+          // For YouTube, use android_sdkless client which provides reliable direct downloads
+          if (isYouTube) {
+            ytdlpOptions.extractorArgs = 'youtube:player_client=android_sdkless';
+            logger.info('Using android_sdkless client for YouTube');
+          }
+          
+          // For TikTok, use API hostname workaround to bypass web extraction issues
+          if (isTikTok) {
+            ytdlpOptions.extractorArgs = 'tiktok:api_hostname=api19-va.tiktokv.com';
+            logger.info('Using TikTok API hostname workaround');
           }
 
           let downloadOutput;
@@ -145,14 +169,29 @@ class VideoService {
           }
 
           const files = await fs.readdir(config.download.tempDir);
-          const downloadedFile = files.find(f => 
+          logger.debug(`Looking for file matching: ${filename.replace('.mp4', '')}`);
+          logger.debug(`Files in temp dir: ${files.join(', ')}`);
+          
+          // Search for downloaded video file with various extensions
+          const videoExtensions = ['.mp4', '.mkv', '.webm', '.unknown_video', '.avi', '.flv', '.m4v'];
+          let downloadedFile = files.find(f => 
             f.startsWith(filename.replace('.mp4', '')) && 
-            (f.endsWith('.mp4') || f.endsWith('.mkv') || f.endsWith('.webm'))
+            videoExtensions.some(ext => f.endsWith(ext))
           );
 
           if (!downloadedFile) {
             logger.warn(`Download completed but no file found for ${strategy.name}`);
             continue;
+          }
+          
+          // If file has .unknown_video extension, rename it to .mp4
+          if (downloadedFile.endsWith('.unknown_video')) {
+            const oldPath = path.join(config.download.tempDir, downloadedFile);
+            const newFilename = downloadedFile.replace('.unknown_video', '.mp4');
+            const newPath = path.join(config.download.tempDir, newFilename);
+            await fs.rename(oldPath, newPath);
+            downloadedFile = newFilename;
+            logger.info(`Renamed .unknown_video to .mp4: ${newFilename}`);
           }
 
           downloadedFilePath = path.join(config.download.tempDir, downloadedFile);
@@ -371,6 +410,14 @@ class VideoService {
 
   async downloadTikTokSlideshow(url) {
     return await tiktokService.downloadTikTokSlideshow(url);
+  }
+
+  /**
+   * Download Instagram post (photos/videos) using instagram-url-direct
+   * Delegates to instagramService for the actual download
+   */
+  async downloadInstagramPost(url) {
+    return await instagramService.downloadInstagramPost(url);
   }
 }
 

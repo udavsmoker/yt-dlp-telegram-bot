@@ -61,13 +61,11 @@ class VideoService {
       } catch {}
 
       // iOS/Telegram compatibility: H.264/AVC + AAC audio, excludes VP9/HEVC
-      // YouTube strategies: Use android_sdkless client for direct HTTPS formats (no HLS 403 errors)
-      // Format 22 = 720p mp4, 18 = 360p mp4 (progressive, reliable with android_sdkless)
+      // YouTube strategies: Provide max quality if cookies present, or fallback to progressive
       const youtubeStrategies = [
-        { name: 'best available', format: 'b/best' },
+        { name: '1080p mp4', format: 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best' },
         { name: '720p mp4', format: '22/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/18' },
-        { name: '360p mp4', format: '18/best[height<=360][ext=mp4]/worst[ext=mp4]' },
-        { name: 'worst quality', format: 'worst' },
+        { name: '360p mp4', format: '18/best[height<=360][ext=mp4]/worst[ext=mp4]' }
       ];
 
       const hlsStrategies = [
@@ -101,11 +99,6 @@ class VideoService {
             } catch {}
           }
 
-          // Note: cookies.txt is no longer used
-          // - YouTube: uses android_sdkless client (doesn't support cookies)
-          // - TikTok: cookies break the extractor
-          // - Other sites: work fine without cookies
-
           const ytdlpOptions = {
             output: outputTemplate,
             format: strategy.format,
@@ -123,20 +116,16 @@ class VideoService {
             ...(refererHeader ? { referer: refererHeader } : {}),
             hlsPreferNative: true,
             externalDownloader: 'native',
+            formatSort: 'vcodec:h264,res,acodec:m4a',
             // Use reduced retries for HLS-heavy sites (slower metadata extraction)
             retries: usesHLS ? 3 : 10,
             fragmentRetries: usesHLS ? 3 : 10,
             // Skip unavailable fragments (livestreams)
-            skipUnavailableFragments: true,
+            skipUnavailableFragments: true
           };
 
-          // For YouTube, use android_sdkless client which provides reliable direct downloads
-          if (isYouTube) {
-            ytdlpOptions.extractorArgs = 'youtube:player_client=android_sdkless';
-            logger.info('Using android_sdkless client for YouTube');
-          }
-          
-          // For TikTok, use API hostname workaround to bypass web extraction issues
+          // Let yt-dlp use default web client + PO Token plugin instead of restricting it!
+          // (bgutil-pot.service will handle the bot protection automatically)
           if (isTikTok) {
             ytdlpOptions.extractorArgs = 'tiktok:api_hostname=api19-va.tiktokv.com';
             logger.info('Using TikTok API hostname workaround');

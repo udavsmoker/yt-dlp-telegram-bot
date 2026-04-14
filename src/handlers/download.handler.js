@@ -1,4 +1,14 @@
 const { Input } = require('telegraf');
+const path = require('path');
+const config = require('../config');
+
+const getFileForTelegram = (filePath) => {
+  if (config.botApiUrl && (config.botApiUrl.includes('localhost') || config.botApiUrl.includes('127.0.0.1'))) {
+    return 'file://' + path.resolve(filePath);
+  }
+  return Input.fromLocalFile(filePath);
+};
+
 const videoService = require('../services/video.service');
 const settingsService = require('../services/settings.service');
 const logger = require('../utils/logger');
@@ -179,19 +189,19 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
               
               if (item.type === 'photo') {
                 await ctx.replyWithPhoto(
-                  Input.fromLocalFile(item.path),
+                  getFileForTelegram(item.path),
                   { caption, parse_mode: 'HTML' }
                 );
               } else {
                 await ctx.replyWithVideo(
-                  Input.fromLocalFile(item.path),
+                  getFileForTelegram(item.path),
                   { caption, parse_mode: 'HTML', supports_streaming: true }
                 );
               }
             } else {
               const mediaGroup = batch.map((item, index) => ({
                 type: item.type,
-                media: Input.fromLocalFile(item.path),
+                media: getFileForTelegram(item.path),
                 // Only add caption to first item of last batch
                 caption: isLastBatch && index === 0 ? `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${result.info.author}\n📱 ${result.info.platform}</blockquote>`.trim() : undefined,
                 parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined,
@@ -268,11 +278,11 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
           };
           
           if (thumbnailPath) {
-            videoOptions.thumbnail = Input.fromLocalFile(thumbnailPath);
+            videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
           }
           
           await ctx.replyWithVideo(
-            Input.fromLocalFile(result.filePath),
+            getFileForTelegram(result.filePath),
             videoOptions
           );
           
@@ -321,7 +331,7 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
             
             const mediaGroup = batch.map((imagePath, index) => ({
               type: 'photo',
-              media: Input.fromLocalFile(imagePath),
+              media: getFileForTelegram(imagePath),
               // Only add caption to first image of last batch
               caption: isLastBatch && index === 0 ? `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>
 
@@ -401,11 +411,11 @@ ${qualityLine}</blockquote>`.trim(),
           };
           
           if (thumbnailPath) {
-            videoOptions.thumbnail = Input.fromLocalFile(thumbnailPath);
+            videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
           }
           
           await ctx.replyWithVideo(
-            Input.fromLocalFile(result.filePath),
+            getFileForTelegram(result.filePath),
             videoOptions
           );
           
@@ -468,11 +478,11 @@ ${qualityLine}</blockquote>`.trim(),
     };
     
     if (thumbnailPath) {
-      videoOptions.thumbnail = Input.fromLocalFile(thumbnailPath);
+      videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
     }
     
     await ctx.replyWithVideo(
-      Input.fromLocalFile(result.filePath),
+      getFileForTelegram(result.filePath),
       videoOptions
     );
     
@@ -564,88 +574,95 @@ async function handleYouTubeCallback(ctx) {
     
     logger.info(`YouTube download confirmed by ${userInfo}: ${url}`);
     
-    const statusMessage = await ctx.reply('⏳ Processing your request...');
+    // Process YouTube download in background
+    processYouTubeDownload(ctx, url, userInfo, pendingDownload.originalMessageId).catch(error => {
+      logger.error(`Background YouTube download error for ${userInfo}:`, error);
+    });
+  }
+}
+
+async function processYouTubeDownload(ctx, url, userInfo, originalMessageId) {
+  const statusMessage = await ctx.reply('⏳ Processing your request...');
+  
+  let filePath = null;
+  let thumbnailPath = null;
+  
+  try {
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      statusMessage.message_id,
+      null,
+      '⬇️ Downloading video with yt-dlp...\nThis may take a moment for large videos.'
+    );
     
-    let filePath = null;
-    let thumbnailPath = null;
+    const result = await videoService.download(url);
+    filePath = result.filePath;
+    thumbnailPath = result.thumbnailPath;
     
-    try {
-      await ctx.telegram.editMessageText(
-        ctx.chat.id,
-        statusMessage.message_id,
-        null,
-        '⬇️ Downloading video with yt-dlp...\nThis may take a moment for large videos.'
-      );
-      
-      const result = await videoService.download(url);
-      filePath = result.filePath;
-      thumbnailPath = result.thumbnailPath;
-      
-      logger.info(`YouTube video downloaded, platform: ${result.info.platform}`);
-      
-      await ctx.telegram.editMessageText(
-        ctx.chat.id,
-        statusMessage.message_id,
-        null,
-        '📤 Uploading to Telegram...'
-      );
-      
-      const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
-      
-      const qualityLine = result.info.quality ? `📊 Quality: ${result.info.quality}\n` : '';
-      
-      const videoOptions = {
-        caption: `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>
+    logger.info(`YouTube video downloaded, platform: ${result.info.platform}`);
+    
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      statusMessage.message_id,
+      null,
+      '📤 Uploading to Telegram...'
+    );
+    
+    const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+    
+    const qualityLine = result.info.quality ? `📊 Quality: ${result.info.quality}\n` : '';
+    
+    const videoOptions = {
+      caption: `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>
 
 <blockquote expandable>👤 ${result.info.author}
 ⏱ ${result.info.duration}
 💾 ${result.info.fileSize}
 📱 ${result.info.platform}
 ${qualityLine}</blockquote>`.trim(),
-        parse_mode: 'HTML',
-        supports_streaming: true,
-        width: result.width,
-        height: result.height,
-        duration: result.duration
-      };
-      
-      if (thumbnailPath) {
-        videoOptions.thumbnail = Input.fromLocalFile(thumbnailPath);
-      }
-      
-      await ctx.replyWithVideo(
-        Input.fromLocalFile(result.filePath),
-        videoOptions
-      );
-      
-      // Delete original user message if possible
-      try {
-        await ctx.telegram.deleteMessage(ctx.chat.id, pendingDownload.originalMessageId);
-      } catch (error) {
-        logger.warn('Could not delete user message (bot might not have permissions)');
-      }
-      
-      await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-      
-      logger.info(`YouTube video sent successfully to ${userInfo}`);
-      
+      parse_mode: 'HTML',
+      supports_streaming: true,
+      width: result.width,
+      height: result.height,
+      duration: result.duration
+    };
+    
+    if (thumbnailPath) {
+      videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
+    }
+    
+    await ctx.replyWithVideo(
+      getFileForTelegram(result.filePath),
+      videoOptions
+    );
+    
+    // Delete original user message if possible
+    try {
+      await ctx.telegram.deleteMessage(ctx.chat.id, originalMessageId);
     } catch (error) {
-      logger.error(`YouTube download failed for ${userInfo}: ${error.message}`);
-      
-      await ctx.telegram.editMessageText(
-        ctx.chat.id,
-        statusMessage.message_id,
-        null,
-        `❌ ${error.message}\n\n*Troubleshooting:*\n• Ensure link is valid\n• Video must be public\n• Max size: ${ctx.telegram.options?.apiRoot?.includes('localhost') ? '2000' : '50'}MB`,
-        { parse_mode: 'Markdown' }
-      );
-    } finally {
-      if (filePath) {
-        await cleanupFile(filePath);
-      }
-      if (thumbnailPath) {
-        await cleanupFile(thumbnailPath);
-      }
+      logger.warn('Could not delete user message (bot might not have permissions)');
+    }
+    
+    await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+    
+    logger.info(`YouTube video sent successfully to ${userInfo}`);
+    
+  } catch (error) {
+    logger.error(`YouTube download failed for ${userInfo}: ${error.message}`);
+    
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      statusMessage.message_id,
+      null,
+      `❌ ${error.message}\n\n*Troubleshooting:*\n• Ensure link is valid\n• Video must be public\n• Max size: ${ctx.telegram.options?.apiRoot?.includes('localhost') ? '2000' : '50'}MB`,
+      { parse_mode: 'Markdown' }
+    );
+  } finally {
+    if (filePath) {
+      await cleanupFile(filePath);
+    }
+    if (thumbnailPath) {
+      await cleanupFile(thumbnailPath);
     }
   }
 }

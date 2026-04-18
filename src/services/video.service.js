@@ -1,6 +1,7 @@
 const youtubedlExec = require('youtube-dl-exec');
 const path = require('path');
 const fs = require('fs').promises;
+const axios = require('axios');
 const { generateFilename, ensureDir } = require('../utils/helpers');
 const config = require('../config');
 const logger = require('../utils/logger');
@@ -52,6 +53,37 @@ class VideoService {
         const host = new URL(url).hostname.toLowerCase().replace('www.', '');
         isYouTube = host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be';
         isTikTok = host === 'tiktok.com' || host.endsWith('.tiktok.com') || host === 'vm.tiktok.com' || host === 'vt.tiktok.com';
+
+        // Twitter API workaround
+        const isTwitter = host === 'twitter.com' || host === 'x.com' || host === 'vxtwitter.com' || host === 'fxtwitter.com' || host === 'fixupx.com';
+        if (isTwitter) {
+          const match = url.match(/(?:\/status\/|\/post\/)([0-9]+)/);
+          if (match) {
+             try {
+               const res = await axios.get(`https://api.fxtwitter.com/status/${match[1]}`);
+               if (res.data && res.data.tweet && res.data.tweet.media && res.data.tweet.media.videos && res.data.tweet.media.videos.length > 0) {
+                 url = res.data.tweet.media.videos[0].url;
+                 logger.info(`Resolved Twitter video URL via fxtwitter: ${url}`);
+               } else if (res.data && res.data.tweet && res.data.tweet.media && res.data.tweet.media.all && res.data.tweet.media.all.length > 0) {
+                 const vid = res.data.tweet.media.all.find(m => m.type === 'video' || m.type === 'gif');
+                 if (vid) {
+                   url = vid.url;
+                   logger.info(`Resolved Twitter video URL via fxtwitter 'all': ${url}`);
+                 } else {
+                   throw new Error('NO_VIDEO_IN_TWEET');
+                 }
+               } else {
+                 throw new Error('NO_VIDEO_IN_TWEET');
+               }
+             } catch (txError) {
+               logger.warn(`Failed to resolve via fxtwitter API: ${txError.message}`);
+               if (txError.message === 'NO_VIDEO_IN_TWEET') {
+                 throw new Error('No video could be found in this tweet');
+               }
+             }
+          }
+        }
+
         // HLS patterns from local config (for sites that need special handling)
         const hlsPatterns = localConfig.hlsPatterns || [];
         usesHLS = hlsPatterns.some(pattern => host.includes(pattern));
@@ -88,6 +120,7 @@ class VideoService {
 
       let downloadedFilePath = null;
       let usedQuality = null;
+      let lastYtdlpError = null;
 
       for (const strategy of formatStrategies) {
         try {
@@ -141,6 +174,8 @@ class VideoService {
             // Log yt-dlp errors but continue to next strategy
             const errorMsg = ytdlpError.message || '';
             const stderr = ytdlpError.stderr || '';
+            
+            lastYtdlpError = stderr || errorMsg;
             
             logger.warn(`yt-dlp failed with ${strategy.name}: ${errorMsg}`);
             
@@ -238,7 +273,13 @@ class VideoService {
       }
 
       if (!downloadedFilePath) {
-        throw new Error('Downloaded file not found');
+          if (lastYtdlpError) {
+            let m = lastYtdlpError.match(/ERROR:\s*\[.*?\][^:]*:\s*(.*)/i);
+            if (!m) m = lastYtdlpError.match(/ERROR:\s*(.*)/i);
+            if (m && m[1]) {
+              throw new Error(`YTDLP_ERROR:${m[1].trim()}`);
+            }
+          }
       }
 
       const stats = await fs.stat(downloadedFilePath);
@@ -342,6 +383,8 @@ class VideoService {
         throw new Error('This video is private or requires authentication');
       } else if (error.message.includes('Video unavailable')) {
         throw new Error('Video is unavailable or has been removed');
+      } else if (error.message.startsWith('YTDLP_ERROR:')) {
+        throw new Error('Download failed - ' + error.message.replace('YTDLP_ERROR:', '').trim());
       } else if (error.message.includes('too large to send via Telegram')) {
         throw error;
       } else if (error.message.includes('Downloaded file not found')) {

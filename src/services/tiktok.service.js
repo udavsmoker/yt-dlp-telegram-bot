@@ -18,25 +18,58 @@ class TikTokService {
       await ensureDir(config.download.tempDir);
 
       let result;
-      let version = 'v3'; // v3 provides HD quality
+      let version = 'v2'; // v2 has higher success rate for restricted videos
       
-      // Try v3 first (has videoHD), fall back to v1
+      // Try v2 first, then v3, then v1, then tikwm
       try {
-        result = await TiktokDL.Downloader(url, { version: "v3" });
+        result = await TiktokDL.Downloader(url, { version: "v2" });
         if (result.status !== 'success') {
-          throw new Error('v3 failed');
+          throw new Error('v2 failed');
         }
-      } catch (v3Error) {
-        logger.warn(`v3 API failed, trying v1: ${v3Error.message}`);
-        version = 'v1';
-        result = await TiktokDL.Downloader(url, { version: "v1" });
+      } catch (v2Error) {
+        logger.warn(`v2 API failed, trying v3: ${v2Error.message}`);
+        version = 'v3';
+        try {
+          result = await TiktokDL.Downloader(url, { version: "v3" });
+          if (result.status !== 'success') {
+            throw new Error('v3 failed');
+          }
+        } catch (v3Error) {
+          logger.warn(`v3 API failed, trying v1: ${v3Error.message}`);
+          version = 'v1';
+          try {
+            result = await TiktokDL.Downloader(url, { version: "v1" });
+          } catch (v1Error) {
+            logger.warn(`v1 API failed, trying tikwm API: ${v1Error.message}`);
+            version = 'tikwm';
+          }
+        }
+      }
+
+      if (version === 'tikwm' || !result || result.status !== 'success') {
+        try {
+          const tikwmResponse = await axios.post('https://www.tikwm.com/api/', { url: url, hd: 1 });
+          if (tikwmResponse.data && tikwmResponse.data.code === 0) {
+            const twData = tikwmResponse.data.data;
+            result = {
+              status: 'success',
+              result: {
+                type: twData.images ? 'image' : 'video',
+                videoHD: twData.hdplay || twData.play,
+                cover: twData.cover,
+                images: twData.images
+              }
+            };
+            version = 'tikwm';
+          } else {
+             throw new Error(tikwmResponse.data?.msg || 'tikwm failed');
+          }
+        } catch (twError) {
+           throw new Error(`TikTok API error: ${twError.message || 'Unknown error'}`);
+        }
       }
 
       logger.info(`TikTok API response status: ${result.status} (using ${version})`);
-
-      if (result.status !== 'success') {
-        throw new Error(`TikTok API error: ${result.message || 'Unknown error'}`);
-      }
 
       const data = result.result;
       

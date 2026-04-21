@@ -70,15 +70,38 @@ class VideoService {
                    url = vid.url;
                    logger.info(`Resolved Twitter video URL via fxtwitter 'all': ${url}`);
                  } else {
-                   throw new Error('NO_VIDEO_IN_TWEET');
+                   const photos = res.data.tweet.media.all.filter(m => m.type === 'photo');
+                   if (photos.length > 0) {
+                     logger.info(`Found ${photos.length} photos in Twitter post, downloading...`);
+                     const imagePaths = [];
+                     for (let i = 0; i < photos.length; i++) {
+                       const photoUrl = photos[i].url;
+                       const imageFilename = generateFilename(`twitter_photo_${i}`, 'jpg');
+                       const imagePath = path.join(config.download.tempDir, imageFilename);
+                       const photoRes = await axios.get(photoUrl, { responseType: 'arraybuffer', timeout: 30000 });
+                       await fs.writeFile(imagePath, photoRes.data);
+                       imagePaths.push(imagePath);
+                     }
+                     return {
+                       type: 'slideshow',
+                       imagePaths,
+                       info: {
+                         author: res.data.tweet.author?.name || res.data.tweet.author?.screen_name || 'Twitter User',
+                         platform: 'Twitter/X',
+                         title: (res.data.tweet.text || 'Twitter Post').substring(0, 100)
+                       }
+                     };
+                   } else {
+                     throw new Error('NO_MEDIA_IN_TWEET');
+                   }
                  }
                } else {
-                 throw new Error('NO_VIDEO_IN_TWEET');
+                 throw new Error('NO_MEDIA_IN_TWEET');
                }
              } catch (txError) {
                logger.warn(`Failed to resolve via fxtwitter API: ${txError.message}`);
-               if (txError.message === 'NO_VIDEO_IN_TWEET') {
-                 throw new Error('No video could be found in this tweet');
+               if (txError.message === 'NO_MEDIA_IN_TWEET') {
+                 throw new Error('No media could be found in this tweet');
                }
              }
           }

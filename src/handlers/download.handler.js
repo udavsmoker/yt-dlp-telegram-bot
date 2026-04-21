@@ -445,6 +445,54 @@ ${qualityLine}</blockquote>`.trim(),
     );
     
     const result = await videoService.download(url);
+    
+    if (result.type === 'slideshow' || result.type === 'image') {
+      const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+      if (result.imagePaths) filesToCleanup.push(...result.imagePaths);
+      
+      logger.info(`Slideshow/Images downloaded: ${(result.imagePaths || []).length} images`);
+      
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMessage.message_id,
+        null,
+        '📤 Uploading photos to Telegram...'
+      );
+      
+      if (result.imagePaths && result.imagePaths.length > 0) {
+        const TELEGRAM_MEDIA_LIMIT = 10;
+        const batches = [];
+        
+        for (let i = 0; i < result.imagePaths.length; i += TELEGRAM_MEDIA_LIMIT) {
+          batches.push(result.imagePaths.slice(i, i + TELEGRAM_MEDIA_LIMIT));
+        }
+        
+        for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+          const batch = batches[batchIndex];
+          const isLastBatch = batchIndex === batches.length - 1;
+          
+          const mediaGroup = batch.map((imagePath, index) => ({
+            type: 'photo',
+            media: getFileForTelegram(imagePath),
+            caption: isLastBatch && index === 0 ? `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${result.info?.author || 'Unknown'}\n📱 ${result.info?.platform || 'Unknown'}</blockquote>`.trim() : undefined,
+            parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined
+          }));
+          
+          if (batch.length === 1 && batches.length === 1) {
+            await ctx.replyWithPhoto(mediaGroup[0].media, { caption: mediaGroup[0].caption, parse_mode: 'HTML' });
+          } else {
+            await ctx.replyWithMediaGroup(mediaGroup);
+          }
+        }
+      }
+      
+      try {
+        await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
+      } catch (error) {}
+      await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+      return;
+    }
+
     filePath = result.filePath;
     thumbnailPath = result.thumbnailPath;
     

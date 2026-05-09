@@ -2,17 +2,17 @@
 
 A feature-rich, high-performance Telegram bot for downloading media from various platforms using `yt-dlp`, coupled with interactive chat enhancements like Markov chain AI, meme generation, and Russian demotivators.
 
-## ✨ Features
+## Features
 
-- 🎬 **Universal Media Downloader**: Support for 1000+ platforms including YouTube, TikTok (videos & slideshows), Instagram (Posts, Reels, IGTV), Twitter/X, Facebook, Reddit, and Vimeo.
-- 🚦 **Smart Fallback System**: Automatically rotates through format qualities and native APIs to ensure successful downloads.
-- 🧼 **Clean User Interface**: Technical `yt-dlp` errors and logs are parsed and stripped of jargon, presenting users with clear, actionable status messages.
-- 📱 **Mobile Optimized**: Automatically ensures iOS-compatible video encoding (H.264).
-- 🤖 **Markov Chain AI**: Generates context-aware, entertaining AI responses based on chat history.
-- 🎨 **Image Generators**: Integrated Meme generator using custom templates and a classic Russian Demotivator creator.
-- 🛡️ **Security & Rate Limiting**: Built-in protections limiting users to 5 requests per minute, plus per-chat feature toggles via the `/settings` interface.
+- **Universal Media Downloader**: Support for 1000+ platforms including YouTube, TikTok (videos & slideshows), Instagram (Posts, Reels, IGTV), Twitter/X, Facebook, Reddit, and Vimeo.
+- **Smart Fallback System**: Automatically rotates through format qualities and native APIs to ensure successful downloads.
+- **Clean User Interface**: Technical `yt-dlp` errors and logs are parsed and stripped of jargon, presenting users with clear, actionable status messages.
+- **Mobile Optimized**: Automatically ensures iOS-compatible video encoding (H.264).
+- **Markov Chain AI**: Generates context-aware, entertaining AI responses based on chat history.
+- **Image Generators**: Integrated Meme generator using custom templates and a classic Russian Demotivator creator.
+- **Security & Rate Limiting**: Built-in protections limiting users to 5 requests per minute, plus per-chat feature toggles via the `/settings` interface.
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Prerequisites
 Ensure you have **Node.js 18+** installed. `yt-dlp` must be installed natively on the system.
@@ -32,7 +32,7 @@ npm install
 npm start
 ```
 
-## 🛠️ Advanced Configuration
+## Advanced Configuration
 
 ### YouTube PO Token Server (Required for YouTube)
 YouTube now requires a Proof-of-Origin (PO) token to download videos, otherwise requests will return `403 Forbidden`.
@@ -60,7 +60,7 @@ For higher quality downloads and bypassing platform-specific rate limits (e.g., 
 1. Export a `cookies.txt` file from your browser.
 2. Place it in the root directory of this repository. The bot will automatically detect and apply it during downloads.
 
-## 📱 Bot Commands
+## Bot Commands
 
 **Core:**
 - `/start` - Welcome message
@@ -80,7 +80,7 @@ For higher quality downloads and bypassing platform-specific rate limits (e.g., 
 - `/setsassiness <0-100>` - Adjust response tone/emotion
 - `/botstats` - View current chat analytics
 
-## 📚 Documentation
+## Documentation
 
 For deep-dives into specific features and architectures, please see our dedicated documentation folder:
 - [Markov Chat AI](docs/MARKOV_FEATURE.md)

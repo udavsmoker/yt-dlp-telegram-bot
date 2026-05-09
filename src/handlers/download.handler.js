@@ -375,7 +375,7 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
             ctx.chat.id,
             statusMessage.message_id,
             null,
-            '⬇️ Trying yt-dlp fallback...'
+            '⬇️ Trying fallback download method...'
           );
           
           const result = await videoService.download(url);
@@ -441,7 +441,7 @@ ${qualityLine}</blockquote>`.trim(),
       ctx.chat.id,
       statusMessage.message_id,
       null,
-      '⬇️ Downloading video with yt-dlp...\nThis may take a moment for large videos.'
+      '⬇️ Downloading video...\nThis may take a moment for large videos.'
     );
     
     const result = await videoService.download(url);
@@ -640,7 +640,7 @@ async function processYouTubeDownload(ctx, url, userInfo, originalMessageId) {
       ctx.chat.id,
       statusMessage.message_id,
       null,
-      '⬇️ Downloading video with yt-dlp...\nThis may take a moment for large videos.'
+      '⬇️ Downloading video...\nThis may take a moment for large videos.'
     );
     
     const result = await videoService.download(url);

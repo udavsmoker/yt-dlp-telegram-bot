@@ -8,25 +8,9 @@ async function handleStart(ctx) {
   const welcomeMessage = `
 🎬 *Welcome to Video Downloader Bot!*
 
-Powered by *yt-dlp*, I can download videos from 1000+ platforms including:
-• TikTok
-• YouTube & YouTube Shorts
-• Instagram (Posts, Reels, IGTV)
-• Twitter/X
-• Facebook
-• Reddit
-• Vimeo
-• And many more!
+Send me a public video link from TikTok, Instagram, YouTube, Twitter or elsewhere, and I'll download it for you! 🚀
 
-*How to use:*
-Just send me a link to any video, and I'll download it for you!
-
-*Commands:*
-/start - Show this message
-/help - Get help
-/about - About this bot
-
-Ready to download? Send me a link! 🚀
+For a list of commands, send /help.
   `;
   
   await ctx.reply(welcomeMessage, { 

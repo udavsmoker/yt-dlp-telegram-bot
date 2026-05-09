@@ -176,7 +176,7 @@ function isInstagramPostUrl(url) {
     
     const path = urlObj.pathname.toLowerCase();
     // Instagram posts use /p/ path, reels use /reel/ or /reels/
-    return path.includes('/p/');
+    return path.includes('/p/') || path.includes('/reel/') || path.includes('/reels/');
   } catch {
     return false;
   }

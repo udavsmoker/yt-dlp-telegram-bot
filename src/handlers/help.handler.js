@@ -6,61 +6,27 @@ async function handleHelp(ctx) {
   logger.info(`Help command from ${userInfo}`);
   
   const helpMessage = `
-📖 *How to Use This Bot*
+📖 *Help*
 
-This bot uses *yt-dlp*, which supports 1000+ platforms!
+Send me any public video link and I'll download it. Max size is 50MB.
 
-*Popular Platforms:*
-✅ TikTok
-✅ YouTube & YouTube Shorts
-✅ Instagram (Posts, Reels, Stories, IGTV)
-✅ Twitter/X
-✅ Facebook
-✅ Reddit
-✅ Vimeo
-✅ Twitch
-✅ And many more!
+*Core commands:*
+/start - Welcome
+/help - Help
+/about - About bot
+/settings - Chat settings (Admins)
+/botstats - View AI stats
 
-*Usage:*
-1. Find a video you want to download
-2. Copy the link
-3. Send it to me
-4. Wait for the download
-5. Enjoy your video!
+*Memes & Fun (if enabled):*
+/meme - Random meme
+/meme list - View templates
+/demotivate - Random demotivator (or reply to a photo)
+/photostats - Photo storage info
 
-*Examples:*
-• https://www.tiktok.com/@user/video/123456
-• https://youtu.be/abc123
-• https://www.instagram.com/reel/xyz789/
-• https://twitter.com/user/status/123456
-
-*Tips:*
-• Videos must be public
-• Max file size: 50MB
-• High quality is automatically selected
-
-*Commands:*
-/start - Welcome message
-/help - This help message
-/about - About the bot
-/settings - Settings menu (admins only)
-
-*Meme Generator (when enabled):*
-/meme - Generate random meme from chat messages
-/meme <template> - Generate meme with specific template
-/meme list - View available templates
-/meme reload - Reload templates (admins only)
-
-*Demotivators (when enabled):*
-/demotivate - Create demotivator from random chat photo
-/demotivate (reply to photo) - Demotivate specific photo
-/photostats - View photo storage statistics
-
-*AI Chat Features (when enabled):*
-/setlaziness <0-100> - How often bot responds (admins only)
-/setcoherence <0-100> - Random vs AI responses (admins only)
-/setsassiness <0-100> - Emotional level (admins only)
-/botstats - View message count and settings
+*AI settings (Admins):*
+/setlaziness <0-100>
+/setcoherence <0-100>
+/setsassiness <0-100>
   `;
   
   await ctx.reply(helpMessage, { 

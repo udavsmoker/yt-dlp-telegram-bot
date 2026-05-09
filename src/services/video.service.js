@@ -407,7 +407,15 @@ class VideoService {
       } else if (error.message.includes('Video unavailable')) {
         throw new Error('Video is unavailable or has been removed');
       } else if (error.message.startsWith('YTDLP_ERROR:')) {
-        throw new Error('Download failed - ' + error.message.replace('YTDLP_ERROR:', '').trim());
+        let cleanError = error.message.replace('YTDLP_ERROR:', '').trim();
+        cleanError = cleanError.split(/(?<=[.!?])\s+/)
+          .filter(sentence => {
+            const s = sentence.toLowerCase();
+            return !s.includes('--cookies') && !s.includes('yt-dlp') && !s.includes('github.com');
+          })
+          .join(' ')
+          .trim();
+        throw new Error('Download failed - ' + cleanError);
       } else if (error.message.includes('too large to send via Telegram')) {
         throw error;
       } else if (error.message.includes('Downloaded file not found')) {

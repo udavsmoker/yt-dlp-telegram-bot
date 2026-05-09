@@ -1,10 +1,21 @@
-# Telegram Video Downloader Bot
+# Telegram Video Downloader & Utility Bot
 
-A Telegram bot for downloading videos from varoius platforms using yt-dlp.
+A feature-rich, high-performance Telegram bot for downloading media from various platforms using `yt-dlp`, coupled with interactive chat enhancements like Markov chain AI, meme generation, and Russian demotivators.
 
-## Quick Start
+## ✨ Features
 
-### 1. Install yt-dlp
+- 🎬 **Universal Media Downloader**: Support for 1000+ platforms including YouTube, TikTok (videos & slideshows), Instagram (Posts, Reels, IGTV), Twitter/X, Facebook, Reddit, and Vimeo.
+- 🚦 **Smart Fallback System**: Automatically rotates through format qualities and native APIs to ensure successful downloads.
+- 🧼 **Clean User Interface**: Technical `yt-dlp` errors and logs are parsed and stripped of jargon, presenting users with clear, actionable status messages.
+- 📱 **Mobile Optimized**: Automatically ensures iOS-compatible video encoding (H.264).
+- 🤖 **Markov Chain AI**: Generates context-aware, entertaining AI responses based on chat history.
+- 🎨 **Image Generators**: Integrated Meme generator using custom templates and a classic Russian Demotivator creator.
+- 🛡️ **Security & Rate Limiting**: Built-in protections limiting users to 5 requests per minute, plus per-chat feature toggles via the `/settings` interface.
+
+## 🚀 Quick Start
+
+### 1. Prerequisites
+Ensure you have **Node.js 18+** installed. `yt-dlp` must be installed natively on the system.
 ```bash
 pip install -U yt-dlp
 ```
@@ -12,7 +23,7 @@ pip install -U yt-dlp
 ### 2. Setup Bot
 ```bash
 cp .env.example .env
-# Edit .env and add your BOT_TOKEN from @BotFather
+# Edit .env and supply your BOT_TOKEN from @BotFather
 ```
 
 ### 3. Install & Run
@@ -21,77 +32,62 @@ npm install
 npm start
 ```
 
-### 4. (Required for YouTube) Setup PO Token Server
+## 🛠️ Advanced Configuration
 
-YouTube now requires a Proof-of-Origin (PO) token to download videos. Without it, you'll get 403 Forbidden errors on all formats.
+### YouTube PO Token Server (Required for YouTube)
+YouTube now requires a Proof-of-Origin (PO) token to download videos, otherwise requests will return `403 Forbidden`.
 
-**Install the bgutil PO Token provider:**
-
+1. **Install the yt-dlp plugin**:
 ```bash
-# Install the yt-dlp plugin
 pip install -U bgutil-ytdlp-pot-provider
-
-# Clone and build the server
+```
+2. **Clone and build the server**:
+```bash
 cd ~
 git clone --single-branch --branch 1.2.2 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git
 cd bgutil-ytdlp-pot-provider/server/
 npm install
 npx tsc
-
-# Start the server (keep it running in a screen/tmux session)
-node build/main.js
 ```
-
-**Run it in a screen session (recommended):**
+3. **Run the server in a background session**:
 ```bash
 screen -dmS bgutil bash -c 'cd ~/bgutil-ytdlp-pot-provider/server && node build/main.js'
 ```
+*The server listens on `http://127.0.0.1:4416` by default. The `yt-dlp` plugin automatically connects to it.*
 
-The server listens on `http://127.0.0.1:4416` by default. The yt-dlp plugin automatically connects to it.
+### Instagram & Platform Cookies
+For higher quality downloads and bypassing platform-specific rate limits (e.g., Instagram login walls), you can provide browser cookies:
+1. Export a `cookies.txt` file from your browser.
+2. Place it in the root directory of this repository. The bot will automatically detect and apply it during downloads.
 
-### 5. (Optional) YouTube Cookies for Higher Quality
+## 📱 Bot Commands
 
-For the best quality (720p+), you can also provide browser cookies:
-[YouTube PO Token Guide - yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide)
+**Core:**
+- `/start` - Welcome message
+- `/help` - View command list
+- `/about` - Technical details about the bot
+- `/settings` - Configure feature toggles (Admins only)
 
+**Fun & Image Generation:**
+- `/meme [template]` - Generate a meme using chat history
+- `/meme list` - List available templates
+- `/demotivate` - Create a Russian demotivator (or reply to an image)
+- `/photostats` - Storage capacity details
 
-**Cookie lifetime:**
-- YouTube cookies typically last 1-2 weeks
-- Re-export cookies if downloads start failing
-- Run `yt-dlp -U` to update yt-dlp monthly
-
-## Features
-- 🎬 Support for various platforms (YouTube, TikTok, Instagram, Twitter/X, etc.)
-- 🤖 AI chat responses using Markov chains
-- 🎨 Meme generator with custom templates
-- �️ Russian demotivator creator
-- ⚡ Fast downloads with quality fallback
-- � iOS-optimized video encoding (H.264)
-- 🛡️ Rate limiting (5 requests/minute per user)
-- ⚙️ Per-chat feature toggles
-
-## Usage
-
-### Video Downloads
-Send any video URL to the bot. Supported platforms include YouTube, TikTok (videos + slideshows), Instagram, Twitter/X, Reddit, Facebook, Vimeo, and more.
-
-### Commands
-- `/settings` - Toggle features (admins only)
-- `/meme [template]` - Generate meme from chat messages
-- `/demotivate` - Create Russian demotivator
+**AI & Chat Moderation (Admins):**
 - `/setlaziness <0-100>` - Adjust AI response frequency
-- `/botstats` - View AI statistics
+- `/setcoherence <0-100>` - Balance between random & AI-generated responses
+- `/setsassiness <0-100>` - Adjust response tone/emotion
+- `/botstats` - View current chat analytics
 
-See [MARKOV_FEATURE.md](MARKOV_FEATURE.md), [MEME_GENERATOR.md](MEME_GENERATOR.md), and [DEMOTIVATOR_FEATURE.md](DEMOTIVATOR_FEATURE.md) for details.
+## 📚 Documentation
 
-## Requirements
-- Node.js 18+
-- yt-dlp (installed separately)
-- Telegram Bot Token
+For deep-dives into specific features and architectures, please see our dedicated documentation folder:
+- [Markov Chat AI](docs/MARKOV_FEATURE.md)
+- [Meme Generator](docs/MEME_GENERATOR.md)
+- [Demotivators](docs/DEMOTIVATOR_FEATURE.md)
+- [Multi-Image Support](docs/MULTI_IMAGE_FEATURE.md)
+- [Settings & Admin Architecture](docs/SETTINGS.md)
 
-## Environment Variables
-```bash
-BOT_TOKEN=your_bot_token_here
-MAX_FILE_SIZE=50  # in MB (Telegram limit ~50MB)
-TEMP_DIR=./temp
-```
+---
+*Powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp)*

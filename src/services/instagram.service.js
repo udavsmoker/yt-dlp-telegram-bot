@@ -1,4 +1,4 @@
-const { instagramGetUrl } = require('instagram-url-direct');
+const { igdl } = require('btch-downloader');
 const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
@@ -8,130 +8,142 @@ const logger = require('../utils/logger');
 
 class InstagramService {
   /**
+   * Fetch title and author from Instagram's public oEmbed API.
+   * No authentication required for public posts.
+   */
+  async getInstagramMetadata(url) {
+    try {
+      const oembedUrl = `https://www.instagram.com/api/v1/oembed/?url=${encodeURIComponent(url)}&maxwidth=320&hidecaption=false&omitscript=true`;
+      const res = await axios.get(oembedUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        timeout: 8000
+      });
+      return {
+        title: res.data.title || 'Instagram Post',
+        author: res.data.author_name || 'Unknown'
+      };
+    } catch (e) {
+      logger.warn(`Could not fetch Instagram oEmbed metadata: ${e.message}`);
+      return { title: 'Instagram Post', author: 'Unknown' };
+    }
+  }
+
+  /**
    * Download Instagram content (photos or video) from a post URL
-   * Handles single images, carousels, and videos
+   * Handles single images, carousels, and videos/Reels
    */
   async downloadInstagramPost(url) {
     try {
-      logger.info(`Downloading Instagram post using instagram-url-direct: ${url}`);
-      
+      logger.info(`Downloading Instagram post using btch-downloader (igdl): ${url}`);
+
       await ensureDir(config.download.tempDir);
 
       // Get direct URLs from Instagram
-      const result = await instagramGetUrl(url);
+      const btchResult = await igdl(url);
       
-      logger.info(`Instagram API response: results=${result.results_number}, owner=${result.post_info?.owner_username || 'unknown'}`);
-
-      if (!result || (!result.url_list || result.url_list.length === 0) && (!result.media_details || result.media_details.length === 0)) {
-        throw new Error('Failed to get Instagram media URLs');
+      if (!btchResult || !btchResult.status || !Array.isArray(btchResult.result)) {
+        logger.warn(`btch-downloader failed for ${url}: ${btchResult?.message || 'Invalid API response'}`);
+        // Return shouldFallback to try yt-dlp
+        return { type: 'video', shouldFallback: true };
       }
 
-      // Use media_details if available (has explicit type info), otherwise fall back to url_list
-      const mediaDetails = result.media_details || [];
+      // Filter out invalid items (like empty objects from 401 error)
+      const validItems = btchResult.result.filter(item => item && item.url);
+      
+      if (validItems.length === 0) {
+        logger.warn(`btch-downloader returned no valid media URLs for ${url}`);
+        return { type: 'video', shouldFallback: true };
+      }
+
+      logger.info(`btch-downloader found ${validItems.length} media item(s) (before dedup)`);
+
+      // btch-downloader returns multiple quality variants per media item.
+      // Deduplicate by the original filename embedded in the JWT token payload.
+      // Items without a decodable token keep their proxied URL as key.
+      const seenKeys = new Set();
+      const uniqueItems = validItems.filter(item => {
+        try {
+          const tokenMatch = item.url.match(/token=([^&]+)/);
+          if (tokenMatch) {
+            const payload = JSON.parse(Buffer.from(tokenMatch[1].split('.')[1], 'base64').toString());
+            const key = payload.filename || payload.url || item.url;
+            if (seenKeys.has(key)) return false;
+            seenKeys.add(key);
+            return true;
+          }
+        } catch { /* fall through */ }
+        // No decodable token — use the URL itself as key
+        if (seenKeys.has(item.url)) return false;
+        seenKeys.add(item.url);
+        return true;
+      });
+
+      logger.info(`After dedup: ${uniqueItems.length} unique media item(s)`);
+
       const filenamePrefix = generateFilename('insta', '');
       const downloadedMedia = [];
-      
-      // Get author info from post_info if available
-      let author = result.post_info?.owner_username ? `@${result.post_info.owner_username}` : 'Unknown';
+      let totalBytes = 0;
 
-      // Count media types
       let imageCount = 0;
       let videoCount = 0;
+
+      // Check if it's a reel
+      const isReel = url.includes('/reel/');
+
+      // Map details and check types
+      const mediaDetails = uniqueItems.map((item) => {
+        const typeFromApi = typeof item.type === 'string' ? item.type.toLowerCase() : '';
+        const isVideo = isReel || typeFromApi === 'video' ||
+          (item.url && (
+            item.url.includes('.mp4') ||
+            item.url.includes('/video/') ||
+            item.url.includes('video_dashinit') ||
+            item.url.includes('.mp4?')
+          ));
+        if (isVideo) videoCount++;
+        else imageCount++;
+
+        return {
+          url: item.url,
+          type: isVideo ? 'video' : 'image'
+        };
+      });
+
+      logger.info(`Media details: ${imageCount} image(s), ${videoCount} video(s)`);
       
-      if (mediaDetails.length > 0) {
-        // Use media_details for accurate type detection and order preservation
-        for (const detail of mediaDetails) {
-          if (detail.type === 'image') imageCount++;
-          else if (detail.type === 'video') videoCount++;
-        }
-        logger.info(`Media details: ${imageCount} image(s), ${videoCount} video(s)`);
+      // Download each media item in order
+      for (let i = 0; i < mediaDetails.length; i++) {
+        const detail = mediaDetails[i];
+        const mediaUrl = detail.url;
+        const mediaType = detail.type;
         
-        // If only videos, fall back to yt-dlp for better quality
-        if (imageCount === 0 && videoCount > 0) {
-          logger.info('Only videos found in post, falling back to video download');
-          return { type: 'video', shouldFallback: true };
-        }
+        const ext = mediaType === 'video' ? 'mp4' : 'jpg';
+        const mediaPath = path.join(config.download.tempDir, `${filenamePrefix.replace(/\.$/, '')}_${i + 1}.${ext}`);
         
-        // Download each media item in order
-        for (let i = 0; i < mediaDetails.length; i++) {
-          const detail = mediaDetails[i];
-          const mediaUrl = detail.url;
-          const mediaType = detail.type;
-          
-          if (!mediaUrl) {
-            logger.warn(`No URL found for media ${i + 1}`);
-            continue;
-          }
-          
-          const ext = mediaType === 'video' ? 'mp4' : 'jpg';
-          const mediaPath = path.join(config.download.tempDir, `${filenamePrefix.replace(/\.$/, '')}_${i + 1}.${ext}`);
-          
-          try {
-            const response = await axios({
-              method: 'GET',
-              url: mediaUrl,
-              responseType: 'arraybuffer',
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://www.instagram.com/'
-              },
-              timeout: mediaType === 'video' ? 60000 : 30000,
-              maxContentLength: 50 * 1024 * 1024 // 50MB max
-            });
+        try {
+          const response = await axios({
+            method: 'GET',
+            url: mediaUrl,
+            responseType: 'arraybuffer',
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Referer': 'https://www.instagram.com/'
+            },
+            timeout: mediaType === 'video' ? 60000 : 30000,
+            maxContentLength: 50 * 1024 * 1024 // 50MB max
+          });
 
-            await fs.writeFile(mediaPath, response.data);
-            downloadedMedia.push({ 
-              type: mediaType === 'video' ? 'video' : 'photo', 
-              path: mediaPath 
-            });
-            logger.info(`Downloaded ${mediaType} ${i + 1}/${mediaDetails.length}`);
-          } catch (downloadError) {
-            logger.error(`Failed to download ${mediaType} ${i + 1}: ${downloadError.message}`);
-          }
-        }
-      } else {
-        // Fallback: use url_list with URL-based type detection
-        const mediaUrls = result.url_list;
-        logger.info(`Using url_list fallback: ${mediaUrls.length} item(s)`);
-        
-        for (let i = 0; i < mediaUrls.length; i++) {
-          const mediaUrl = mediaUrls[i];
-          // Detect type from URL
-          const isVideo = mediaUrl.includes('.mp4') || mediaUrl.includes('/video/') || mediaUrl.includes('video_dashinit');
-          const ext = isVideo ? 'mp4' : 'jpg';
-          const mediaPath = path.join(config.download.tempDir, `${filenamePrefix.replace(/\.$/, '')}_${i + 1}.${ext}`);
-          
-          if (isVideo) videoCount++;
-          else imageCount++;
-          
-          try {
-            const response = await axios({
-              method: 'GET',
-              url: mediaUrl,
-              responseType: 'arraybuffer',
-              headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://www.instagram.com/'
-              },
-              timeout: isVideo ? 60000 : 30000,
-              maxContentLength: 50 * 1024 * 1024
-            });
-
-            await fs.writeFile(mediaPath, response.data);
-            downloadedMedia.push({ 
-              type: isVideo ? 'video' : 'photo', 
-              path: mediaPath 
-            });
-            logger.info(`Downloaded media ${i + 1}/${mediaUrls.length} (${isVideo ? 'video' : 'image'})`);
-          } catch (downloadError) {
-            logger.error(`Failed to download media ${i + 1}: ${downloadError.message}`);
-          }
-        }
-        
-        // If only videos, fall back to yt-dlp
-        if (imageCount === 0 && videoCount > 0 && downloadedMedia.length === 0) {
-          logger.info('Only videos found in post, falling back to video download');
-          return { type: 'video', shouldFallback: true };
+          await fs.writeFile(mediaPath, response.data);
+          totalBytes += response.data.byteLength || response.data.length || 0;
+          downloadedMedia.push({ 
+            type: mediaType === 'video' ? 'video' : 'photo', 
+            path: mediaPath 
+          });
+          logger.info(`Downloaded ${mediaType} ${i + 1}/${mediaDetails.length}`);
+        } catch (downloadError) {
+          logger.error(`Failed to download ${mediaType} ${i + 1}: ${downloadError.message}`);
         }
       }
 
@@ -139,17 +151,41 @@ class InstagramService {
         throw new Error('Failed to download any media from the post');
       }
 
+      const meta = await this.getInstagramMetadata(url);
+
+      // Extract duration from the first video file (e.g. Reels)
+      let duration = null;
+      const firstVideo = downloadedMedia.find(m => m.type === 'video');
+      if (firstVideo) {
+        try {
+          const { execSync } = require('child_process');
+          const raw = execSync(
+            `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${firstVideo.path}"`,
+            { encoding: 'utf8', timeout: 5000 }
+          ).trim();
+          const secs = parseFloat(raw);
+          if (!isNaN(secs) && secs > 0) duration = this.formatDuration(secs);
+        } catch {
+          // ffprobe unavailable or failed — skip duration
+        }
+      }
+
+      const finalImageCount = downloadedMedia.filter(m => m.type === 'photo').length;
+      const finalVideoCount = downloadedMedia.filter(m => m.type === 'video').length;
+
       return {
         type: 'mixed', // Can contain photos and videos
         media: downloadedMedia,
         imagePaths: downloadedMedia.filter(m => m.type === 'photo').map(m => m.path),
         videoPaths: downloadedMedia.filter(m => m.type === 'video').map(m => m.path),
         info: {
-          title: 'Instagram Post',
-          author: author,
+          title: meta.title,
+          author: meta.author,
           platform: 'Instagram',
-          imageCount: downloadedMedia.filter(m => m.type === 'photo').length,
-          videoCount: downloadedMedia.filter(m => m.type === 'video').length
+          duration,
+          fileSize: this.formatFileSize(totalBytes),
+          imageCount: finalImageCount,
+          videoCount: finalVideoCount
         }
       };
 
@@ -162,6 +198,25 @@ class InstagramService {
       
       throw new Error(`Instagram download failed: ${error.message}`);
     }
+  }
+
+  formatFileSize(bytes) {
+    if (!bytes || bytes === 0) return 'Unknown';
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    if (i === 0) return `${bytes} ${sizes[i]}`;
+    return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
+  }
+
+  formatDuration(seconds) {
+    if (!seconds) return null;
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
   }
 }
 

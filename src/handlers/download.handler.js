@@ -185,7 +185,14 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
             if (batch.length === 1 && batches.length === 1) {
               // Single item - send individually
               const item = batch[0];
-              const caption = `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${result.info.author}\n📱 ${result.info.platform}</blockquote>`.trim();
+              const metaLines = [
+                `👤 ${result.info.author}`,
+                result.info.duration ? `⏱ ${result.info.duration}` : null,
+                `💾 ${result.info.fileSize}`,
+                `📱 ${result.info.platform}`,
+                result.info.title ? `\n${result.info.title}` : null
+              ].filter(Boolean).join('\n');
+              const caption = `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${metaLines}</blockquote>`.trim();
               
               if (item.type === 'photo') {
                 await ctx.replyWithPhoto(
@@ -199,11 +206,19 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
                 );
               }
             } else {
+              const mediaMetaLines = [
+                `👤 ${result.info.author}`,
+                result.info.duration ? `⏱ ${result.info.duration}` : null,
+                `💾 ${result.info.fileSize}`,
+                `📱 ${result.info.platform}`,
+                result.info.title ? `\n${result.info.title}` : null
+              ].filter(Boolean).join('\n');
+              const mediaCaption = `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${mediaMetaLines}</blockquote>`.trim();
+
               const mediaGroup = batch.map((item, index) => ({
                 type: item.type,
                 media: getFileForTelegram(item.path),
-                // Only add caption to first item of last batch
-                caption: isLastBatch && index === 0 ? `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${result.info.author}\n📱 ${result.info.platform}</blockquote>`.trim() : undefined,
+                caption: isLastBatch && index === 0 ? mediaCaption : undefined,
                 parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined,
                 ...(item.type === 'video' ? { supports_streaming: true } : {})
               }));

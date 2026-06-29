@@ -12,6 +12,7 @@ module.exports = {
   },
   download: {
     maxFileSizeMB: parseInt(process.env.MAX_FILE_SIZE || '50', 10),
-    tempDir: process.env.TEMP_DIR || './temp'
+    tempDir: process.env.TEMP_DIR || './temp',
+    cookiesFile: process.env.YTDLP_COOKIES_FILE || (require('fs').existsSync(require('path').join(__dirname, '../../cookies.txt')) ? require('path').join(__dirname, '../../cookies.txt') : null)
   }
 };

@@ -170,6 +170,8 @@ class VideoService {
             windowsFilenames: true, // Extra-strict filename sanitization (works on all OSes)
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             ...(refererHeader ? { referer: refererHeader } : {}),
+            // Use cookies if configured
+            ...(config.download.cookiesFile ? { cookies: config.download.cookiesFile } : {}),
             hlsPreferNative: true,
             externalDownloader: 'native',
             formatSort: 'vcodec:h264,res,acodec:m4a',

@@ -95,13 +95,37 @@ class InstagramService {
       // Map details and check types
       const mediaDetails = uniqueItems.map((item) => {
         const typeFromApi = typeof item.type === 'string' ? item.type.toLowerCase() : '';
-        const isVideo = isReel || typeFromApi === 'video' ||
-          (item.url && (
-            item.url.includes('.mp4') ||
-            item.url.includes('/video/') ||
-            item.url.includes('video_dashinit') ||
-            item.url.includes('.mp4?')
-          ));
+        let isVideo = isReel || typeFromApi === 'video';
+
+        if (!isVideo && item.url) {
+          // Check URL heuristics
+          if (item.url.includes('.mp4') ||
+              item.url.includes('/video/') ||
+              item.url.includes('video_dashinit') ||
+              item.url.includes('.mp4?')) {
+            isVideo = true;
+          } else {
+            // Check token payload if present
+            try {
+              const tokenMatch = item.url.match(/token=([^&]+)/);
+              if (tokenMatch) {
+                const payload = JSON.parse(Buffer.from(tokenMatch[1].split('.')[1], 'base64').toString());
+                const filename = (payload.filename || '').toLowerCase();
+                const innerUrl = (payload.url || '').toLowerCase();
+                if (filename.endsWith('.mp4') || 
+                    filename.includes('.mp4') ||
+                    innerUrl.includes('.mp4') || 
+                    innerUrl.includes('/video/') || 
+                    innerUrl.includes('video_dashinit')) {
+                  isVideo = true;
+                }
+              }
+            } catch (e) {
+              // Ignore decoding errors
+            }
+          }
+        }
+
         if (isVideo) videoCount++;
         else imageCount++;
 
@@ -137,9 +161,35 @@ class InstagramService {
 
           await fs.writeFile(mediaPath, response.data);
           totalBytes += response.data.byteLength || response.data.length || 0;
+
+          let thumbnailPath = null;
+          if (mediaType === 'video') {
+            const thumbPath = mediaPath.replace(/\.mp4$/, '_thumb.jpg');
+            try {
+              const { execSync } = require('child_process');
+              execSync(
+                `ffmpeg -y -i "${mediaPath}" -ss 00:00:01 -vframes 1 -f image2 "${thumbPath}"`,
+                { stdio: 'ignore', timeout: 5000 }
+              );
+              thumbnailPath = thumbPath;
+            } catch (e) {
+              try {
+                const { execSync } = require('child_process');
+                execSync(
+                  `ffmpeg -y -i "${mediaPath}" -ss 00:00:00 -vframes 1 -f image2 "${thumbPath}"`,
+                  { stdio: 'ignore', timeout: 5000 }
+                );
+                thumbnailPath = thumbPath;
+              } catch (err) {
+                logger.warn(`Could not generate thumbnail for video: ${err.message}`);
+              }
+            }
+          }
+
           downloadedMedia.push({ 
             type: mediaType === 'video' ? 'video' : 'photo', 
-            path: mediaPath 
+            path: mediaPath,
+            thumbnailPath: thumbnailPath
           });
           logger.info(`Downloaded ${mediaType} ${i + 1}/${mediaDetails.length}`);
         } catch (downloadError) {
@@ -153,20 +203,34 @@ class InstagramService {
 
       const meta = await this.getInstagramMetadata(url);
 
-      // Extract duration from the first video file (e.g. Reels)
-      let duration = null;
+      // Extract metadata (width, height, duration) from the first video file (e.g. Reels)
+      let videoWidth = undefined;
+      let videoHeight = undefined;
+      let videoDurationSecs = undefined;
+      let durationStr = null;
+
       const firstVideo = downloadedMedia.find(m => m.type === 'video');
       if (firstVideo) {
         try {
           const { execSync } = require('child_process');
-          const raw = execSync(
-            `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${firstVideo.path}"`,
+          const ffprobeRes = execSync(
+            `ffprobe -v error -select_streams v:0 -show_entries stream=width,height,duration:format=duration -of json "${firstVideo.path}"`,
             { encoding: 'utf8', timeout: 5000 }
-          ).trim();
-          const secs = parseFloat(raw);
-          if (!isNaN(secs) && secs > 0) duration = this.formatDuration(secs);
-        } catch {
-          // ffprobe unavailable or failed — skip duration
+          );
+          const parsed = JSON.parse(ffprobeRes);
+          if (parsed.streams && parsed.streams[0]) {
+            videoWidth = parsed.streams[0].width || undefined;
+            videoHeight = parsed.streams[0].height || undefined;
+            videoDurationSecs = parseFloat(parsed.streams[0].duration) || undefined;
+          }
+          if (!videoDurationSecs && parsed.format && parsed.format.duration) {
+            videoDurationSecs = parseFloat(parsed.format.duration) || undefined;
+          }
+          if (videoDurationSecs) {
+            durationStr = this.formatDuration(videoDurationSecs);
+          }
+        } catch (e) {
+          logger.warn(`Could not extract video metadata with ffprobe: ${e.message}`);
         }
       }
 
@@ -178,11 +242,14 @@ class InstagramService {
         media: downloadedMedia,
         imagePaths: downloadedMedia.filter(m => m.type === 'photo').map(m => m.path),
         videoPaths: downloadedMedia.filter(m => m.type === 'video').map(m => m.path),
+        width: videoWidth,
+        height: videoHeight,
+        duration: videoDurationSecs,
         info: {
           title: meta.title,
           author: meta.author,
           platform: 'Instagram',
-          duration,
+          duration: durationStr,
           fileSize: this.formatFileSize(totalBytes),
           imageCount: finalImageCount,
           videoCount: finalVideoCount

@@ -162,7 +162,10 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
           if (result.media && result.media.length > 0) {
             allMedia.length = 0;
             for (const m of result.media) {
-              allMedia.push({ type: m.type, path: m.path });
+              allMedia.push({ type: m.type, path: m.path, thumbnailPath: m.thumbnailPath });
+              if (m.thumbnailPath) {
+                filesToCleanup.push(m.thumbnailPath);
+              }
             }
           }
           
@@ -202,7 +205,15 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
               } else {
                 await ctx.replyWithVideo(
                   getFileForTelegram(item.path),
-                  { caption, parse_mode: 'HTML', supports_streaming: true }
+                  { 
+                    caption, 
+                    parse_mode: 'HTML', 
+                    supports_streaming: true,
+                    width: result.width,
+                    height: result.height,
+                    duration: result.duration,
+                    thumbnail: item.thumbnailPath ? getFileForTelegram(item.thumbnailPath) : undefined
+                  }
                 );
               }
             } else {
@@ -220,7 +231,13 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
                 media: getFileForTelegram(item.path),
                 caption: isLastBatch && index === 0 ? mediaCaption : undefined,
                 parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined,
-                ...(item.type === 'video' ? { supports_streaming: true } : {})
+                thumbnail: item.thumbnailPath ? getFileForTelegram(item.thumbnailPath) : undefined,
+                ...(item.type === 'video' ? { 
+                  supports_streaming: true,
+                  width: result.width,
+                  height: result.height,
+                  duration: result.duration
+                } : {})
               }));
               
               await ctx.replyWithMediaGroup(mediaGroup);

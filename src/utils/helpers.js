@@ -182,12 +182,23 @@ function isInstagramPostUrl(url) {
   }
 }
 
+const { Input } = require('telegraf');
+const config = require('../config');
+
+function getFileForTelegram(filePath) {
+  if (config.botApiUrl && (config.botApiUrl.includes('localhost') || config.botApiUrl.includes('127.0.0.1'))) {
+    return 'file://' + path.resolve(filePath);
+  }
+  return Input.fromLocalFile(filePath);
+}
+
 module.exports = {
   extractUrl,
   ensureDir,
   cleanupFile,
   generateFilename,
   getUserInfo,
+  getFileForTelegram,
   isValidVideoUrl,
   isTikTokPhotoUrl,
   isTikTokUrl,

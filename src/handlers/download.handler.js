@@ -1,18 +1,9 @@
-const { Input } = require('telegraf');
 const path = require('path');
 const config = require('../config');
-
-const getFileForTelegram = (filePath) => {
-  if (config.botApiUrl && (config.botApiUrl.includes('localhost') || config.botApiUrl.includes('127.0.0.1'))) {
-    return 'file://' + path.resolve(filePath);
-  }
-  return Input.fromLocalFile(filePath);
-};
-
 const videoService = require('../services/video.service');
 const settingsService = require('../services/settings.service');
 const logger = require('../utils/logger');
-const { extractUrl, getUserInfo, cleanupFile, isValidVideoUrl, isTikTokPhotoUrl, isTikTokUrl, isYouTubeUrl, isInstagramUrl, isInstagramPostUrl } = require('../utils/helpers');
+const { extractUrl, getUserInfo, cleanupFile, getFileForTelegram, isValidVideoUrl, isTikTokPhotoUrl, isTikTokUrl, isYouTubeUrl, isInstagramUrl, isInstagramPostUrl } = require('../utils/helpers');
 
 const userRequests = new Map();
 const MAX_REQUESTS = 5;

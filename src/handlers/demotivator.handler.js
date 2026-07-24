@@ -2,8 +2,7 @@ const demotivatorService = require('../services/demotivator.service');
 const photoDb = require('../services/photo-database.service');
 const settingsService = require('../services/settings.service');
 const logger = require('../utils/logger');
-const { getUserInfo, cleanupFile } = require('../utils/helpers');
-const { Input } = require('telegraf');
+const { getUserInfo, cleanupFile, getFileForTelegram } = require('../utils/helpers');
 
 async function handleDemotivate(ctx) {
   const userInfo = getUserInfo(ctx);
@@ -40,7 +39,7 @@ async function handleDemotivate(ctx) {
 
     await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
 
-    await ctx.replyWithPhoto(Input.fromLocalFile(resultPath));
+    await ctx.replyWithPhoto(getFileForTelegram(resultPath));
 
     logger.info('Demotivator sent successfully');
   } catch (error) {

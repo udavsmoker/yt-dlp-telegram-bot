@@ -2,8 +2,7 @@ const memeService = require('../services/meme.service');
 const settingsService = require('../services/settings.service');
 const markovDb = require('../services/markov-database.service');
 const logger = require('../utils/logger');
-const { getUserInfo, cleanupFile } = require('../utils/helpers');
-const { Input } = require('telegraf');
+const { getUserInfo, cleanupFile, getFileForTelegram } = require('../utils/helpers');
 
 async function handleMeme(ctx) {
   const userInfo = getUserInfo(ctx);
@@ -66,7 +65,7 @@ async function handleMeme(ctx) {
     );
 
     await ctx.replyWithPhoto(
-      Input.fromLocalFile(result.filePath),
+      getFileForTelegram(result.filePath),
       {
         caption: `Template: ${result.templateName}`
       }

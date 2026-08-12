@@ -164,6 +164,7 @@ class VideoService {
             preferFreeFormats: true,
             // Disable metadata to prevent postprocessing errors with special chars
             noPostOverwrites: true,
+            writeInfoJson: true,
             writeThumbnail: true,
             convertThumbnails: 'jpg',
             restrictFilenames: true,
@@ -336,6 +337,25 @@ class VideoService {
       }
 
       let width = 1280, height = 720, duration = 0, title = 'Video', author = 'Unknown';
+      
+      try {
+        const fullInfoPath = downloadedFilePath.substring(0, downloadedFilePath.lastIndexOf('.')) + '.info.json';
+        const infoJsonExists = await fs.access(fullInfoPath).then(() => true).catch(() => false);
+        
+        if (infoJsonExists) {
+          const infoJson = JSON.parse(await fs.readFile(fullInfoPath, 'utf8'));
+          if (infoJson.title) title = infoJson.title;
+          if (infoJson.uploader || infoJson.channel || infoJson.creator) {
+            author = infoJson.uploader || infoJson.channel || infoJson.creator;
+          }
+          if (infoJson.duration) duration = infoJson.duration;
+          
+          try { await fs.unlink(fullInfoPath); } catch {}
+        }
+      } catch (e) {
+        logger.warn(`Could not read info.json: ${e.message}`);
+      }
+
       try {
         const { execSync } = require('child_process');
         const metadata = execSync(
@@ -355,15 +375,17 @@ class VideoService {
         }
         
         if (parsed.format && parsed.format.tags) {
-          if (parsed.format.tags.title) {
+          if (parsed.format.tags.title && title === 'Video') {
             title = parsed.format.tags.title;
           }
           
-          author = parsed.format.tags.artist || 
-                   parsed.format.tags.author || 
-                   parsed.format.tags.uploader || 
-                   parsed.format.tags.creator || 
-                   'Unknown';
+          if (author === 'Unknown') {
+            author = parsed.format.tags.artist || 
+                     parsed.format.tags.author || 
+                     parsed.format.tags.uploader || 
+                     parsed.format.tags.creator || 
+                     'Unknown';
+          }
           
           const byMatch = title.match(/(?:Video|Post|Reel)\s+by\s+(.+)$/i);
           if (byMatch && author === 'Unknown') {
@@ -481,8 +503,8 @@ class VideoService {
    * Download Instagram post (photos/videos) using instagram-url-direct
    * Delegates to instagramService for the actual download
    */
-  async downloadInstagramPost(url) {
-    return await instagramService.downloadInstagramPost(url);
+  async downloadInstagramPost(url, imgIndex = null) {
+    return await instagramService.downloadInstagramPost(url, imgIndex);
   }
 }
 

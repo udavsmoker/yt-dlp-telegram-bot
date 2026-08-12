@@ -30,12 +30,15 @@
     "telegraf": "^4.16.3",
     "tiktok-scraper": "^1.4.36",
     "winston": "^3.15.0",
-    "youtube-dl-exec": "^3.0.10"
+    "youtube-dl-exec": "^3.1.12"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true
   }
 }

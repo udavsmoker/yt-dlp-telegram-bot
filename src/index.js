@@ -9,7 +9,7 @@ const { blacklistCheckMiddleware } = require('./middleware/blacklist.middleware'
 const handleStart = require('./handlers/start.handler');
 const handleHelp = require('./handlers/help.handler');
 const handleAbout = require('./handlers/about.handler');
-const { handleDownload, handleYouTubeCallback } = require('./handlers/download.handler');
+const { handleDownload, handleYouTubeCallback, handleInstagramCallback, handleMp3Command, handleAudioCallback } = require('./handlers/download.handler');
 const handleMeme = require('./handlers/meme.handler');
 const { handleDemotivate, handlePhotoStats } = require('./handlers/demotivator.handler');
 const { handleSettings, handleSettingsCallback } = require('./handlers/settings.handler');
@@ -59,6 +59,7 @@ bot.command('setsassiness', handleSetSassiness);
 bot.command('botstats', handleBotStats);
 
 bot.command('blacklist', handleBlacklist);
+bot.command('mp3', handleMp3Command);
 
 bot.action(/^toggle_/, handleSettingsCallback);
 bot.action('settings_close', handleSettingsCallback);
@@ -66,6 +67,11 @@ bot.action('settings_close', handleSettingsCallback);
 // YouTube download confirmation callbacks
 bot.action('yt_download', handleYouTubeCallback);
 bot.action('yt_cancel', handleYouTubeCallback);
+bot.action('yt_audio', handleAudioCallback);
+
+// Instagram carousel selection callbacks
+bot.action('insta_single', handleInstagramCallback);
+bot.action('insta_all', handleInstagramCallback);
 
 bot.on(message('text'), handleDownload);
 

@@ -5,28 +5,32 @@ async function handleHelp(ctx) {
   const userInfo = getUserInfo(ctx);
   logger.info(`Help command from ${userInfo}`);
   
+  const isLocal = ctx.telegram.options?.apiRoot?.includes('localhost');
+  const maxSize = isLocal ? '2000MB' : '50MB';
+
   const helpMessage = `
-📖 *Help*
+*Commands:*
+/start - welcome message
+/help - this message
+/about - technical details
+/mp3 - extract audio from a replied video
+/settings - chat settings (Admins)
+/botstats - view AI stats
 
-Send me any public video link and I'll download it. Max size is 50MB.
-
-*Core commands:*
-/start - Welcome
-/help - Help
-/about - About bot
-/settings - Chat settings (Admins)
-/botstats - View AI stats
-
-*Memes & Fun (if enabled):*
-/meme - Random meme
-/meme list - View templates
-/demotivate - Random demotivator (or reply to a photo)
-/photostats - Photo storage info
+*Fun (if enabled):*
+/meme [template] - generate a meme
+/meme list - available templates
+/demotivate - create a demotivator (or reply to a photo)
+/photostats - photo storage info
 
 *AI settings (Admins):*
 /setlaziness <0-100>
 /setcoherence <0-100>
 /setsassiness <0-100>
+
+*Usage:*
+Just send a valid video link.
+Max size: ${maxSize}.
   `;
   
   await ctx.reply(helpMessage, { 

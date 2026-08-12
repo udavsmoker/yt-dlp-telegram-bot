@@ -182,6 +182,20 @@ function isInstagramPostUrl(url) {
   }
 }
 
+function getInstagramImgIndex(url) {
+  try {
+    const urlObj = new URL(url);
+    const imgIndex = urlObj.searchParams.get('img_index');
+    if (imgIndex) {
+      const index = parseInt(imgIndex, 10);
+      if (!isNaN(index) && index >= 1) return index;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 const { Input } = require('telegraf');
 const config = require('../config');
 
@@ -204,5 +218,6 @@ module.exports = {
   isTikTokUrl,
   isYouTubeUrl,
   isInstagramUrl,
-  isInstagramPostUrl
+  isInstagramPostUrl,
+  getInstagramImgIndex
 };

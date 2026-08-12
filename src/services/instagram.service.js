@@ -34,17 +34,25 @@ class InstagramService {
    * Download Instagram content (photos or video) from a post URL
    * Handles single images, carousels, and videos/Reels
    */
-  async downloadInstagramPost(url) {
+  async downloadInstagramPost(url, imgIndex = null) {
     try {
       logger.info(`Downloading Instagram post using btch-downloader (igdl): ${url}`);
 
       await ensureDir(config.download.tempDir);
 
+      // Clean img_index from URL before querying API
+      let cleanUrlStr = url;
+      try {
+        const cleanUrl = new URL(url);
+        cleanUrl.searchParams.delete('img_index');
+        cleanUrlStr = cleanUrl.toString();
+      } catch {}
+
       // Get direct URLs from Instagram
-      const btchResult = await igdl(url);
+      const btchResult = await igdl(cleanUrlStr);
       
       if (!btchResult || !btchResult.status || !Array.isArray(btchResult.result)) {
-        logger.warn(`btch-downloader failed for ${url}: ${btchResult?.message || 'Invalid API response'}`);
+        logger.warn(`btch-downloader failed for ${cleanUrlStr}: ${btchResult?.message || 'Invalid API response'}`);
         // Return shouldFallback to try yt-dlp
         return { type: 'video', shouldFallback: true };
       }
@@ -53,7 +61,7 @@ class InstagramService {
       const validItems = btchResult.result.filter(item => item && item.url);
       
       if (validItems.length === 0) {
-        logger.warn(`btch-downloader returned no valid media URLs for ${url}`);
+        logger.warn(`btch-downloader returned no valid media URLs for ${cleanUrlStr}`);
         return { type: 'video', shouldFallback: true };
       }
 
@@ -134,6 +142,17 @@ class InstagramService {
           type: isVideo ? 'video' : 'image'
         };
       });
+
+      // Filter to single item if imgIndex is specified
+      if (imgIndex !== null && imgIndex >= 1 && imgIndex <= mediaDetails.length) {
+        const selected = mediaDetails[imgIndex - 1];
+        mediaDetails.splice(0, mediaDetails.length, selected);
+        imageCount = selected.type === 'image' ? 1 : 0;
+        videoCount = selected.type === 'video' ? 1 : 0;
+        logger.info(`Filtered to single item at index ${imgIndex}`);
+      } else if (imgIndex !== null && (imgIndex < 1 || imgIndex > mediaDetails.length)) {
+        logger.warn(`imgIndex ${imgIndex} is out of bounds (1..${mediaDetails.length}), downloading all items`);
+      }
 
       logger.info(`Media details: ${imageCount} image(s), ${videoCount} video(s)`);
       

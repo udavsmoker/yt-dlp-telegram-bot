@@ -6,11 +6,10 @@ async function handleStart(ctx) {
   logger.info(`Start command from ${userInfo}`);
   
   const welcomeMessage = `
-🎬 *Welcome to Video Downloader Bot!*
+Hi. I'm a video downloader bot.
 
-Send me a public video link from TikTok, Instagram, YouTube, Twitter or elsewhere, and I'll download it for you! 🚀
-
-For a list of commands, send /help.
+Send me a link from YouTube, TikTok, Instagram, Twitter, Reddit, or elsewhere, and I'll download it.
+Use /help to see available commands.
   `;
   
   await ctx.reply(welcomeMessage, { 

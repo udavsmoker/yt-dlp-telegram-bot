@@ -18,54 +18,58 @@ class TikTokService {
       await ensureDir(config.download.tempDir);
 
       let result;
-      let version = 'v2'; // v2 has higher success rate for restricted videos
+      let version = 'tikwm';
       
-      // Try v2 first, then v3, then v1, then tikwm
+      // Try tikwm first (reliable 720p HD, small file size), then v3 (FullHD but unpredictable size), then v2/v1
       try {
-        result = await TiktokDL.Downloader(url, { version: "v2" });
-        if (result.status !== 'success') {
-          throw new Error('v2 failed');
+        const tikwmResponse = await axios.post('https://www.tikwm.com/api/', { url: url, hd: 1 }, { timeout: 15000 });
+        if (tikwmResponse.data && tikwmResponse.data.code === 0) {
+          const twData = tikwmResponse.data.data;
+          result = {
+            status: 'success',
+            result: {
+              type: twData.images ? 'image' : 'video',
+              videoHD: twData.hdplay || twData.play,
+              cover: twData.cover,
+              images: twData.images,
+              desc: twData.title,
+              author: { nickname: twData.author?.nickname || twData.author?.unique_id },
+              music: twData.music_info?.play ? { playUrl: [twData.music_info.play] } : undefined
+            }
+          };
+        } else {
+          throw new Error(tikwmResponse.data?.msg || 'tikwm failed');
         }
-      } catch (v2Error) {
-        logger.warn(`v2 API failed, trying v3: ${v2Error.message}`);
+      } catch (twError) {
+        logger.warn(`tikwm API failed, trying v3: ${twError.message}`);
         version = 'v3';
+        
         try {
           result = await TiktokDL.Downloader(url, { version: "v3" });
           if (result.status !== 'success') {
             throw new Error('v3 failed');
           }
         } catch (v3Error) {
-          logger.warn(`v3 API failed, trying v1: ${v3Error.message}`);
-          version = 'v1';
+          logger.warn(`v3 API failed, trying v2: ${v3Error.message}`);
+          version = 'v2';
+          
           try {
-            result = await TiktokDL.Downloader(url, { version: "v1" });
-          } catch (v1Error) {
-            logger.warn(`v1 API failed, trying tikwm API: ${v1Error.message}`);
-            version = 'tikwm';
-          }
-        }
-      }
-
-      if (version === 'tikwm' || !result || result.status !== 'success') {
-        try {
-          const tikwmResponse = await axios.post('https://www.tikwm.com/api/', { url: url, hd: 1 });
-          if (tikwmResponse.data && tikwmResponse.data.code === 0) {
-            const twData = tikwmResponse.data.data;
-            result = {
-              status: 'success',
-              result: {
-                type: twData.images ? 'image' : 'video',
-                videoHD: twData.hdplay || twData.play,
-                cover: twData.cover,
-                images: twData.images
+            result = await TiktokDL.Downloader(url, { version: "v2" });
+            if (result.status !== 'success') {
+              throw new Error('v2 failed');
+            }
+          } catch (v2Error) {
+            logger.warn(`v2 API failed, trying v1: ${v2Error.message}`);
+            version = 'v1';
+            try {
+              result = await TiktokDL.Downloader(url, { version: "v1" });
+              if (result.status !== 'success') {
+                throw new Error('All TikTok APIs failed');
               }
-            };
-            version = 'tikwm';
-          } else {
-             throw new Error(tikwmResponse.data?.msg || 'tikwm failed');
+            } catch (v1Error) {
+              throw new Error(`TikTok API error: all sources failed`);
+            }
           }
-        } catch (twError) {
-           throw new Error(`TikTok API error: ${twError.message || 'Unknown error'}`);
         }
       }
 
@@ -116,16 +120,16 @@ class TikTokService {
       return null;
     };
     
-    // Try to get video URL - prioritize HD quality (v3 API format)
-    // v3 API structure: data.videoHD, data.videoSD
-    // v1 API structure: data.video.noWatermark, data.video.playAddr
-    const videoUrl = extractUrl(data.videoHD) ||  // v3 HD
-                     extractUrl(data.videoSD) ||   // v3 SD
-                     extractUrl(data.video?.noWatermark) ||  // v1
-                     extractUrl(data.video?.playAddr) ||
-                     extractUrl(data.video?.downloadAddr) ||
-                     extractUrl(data.video?.play) ||
-                     extractUrl(data.video);
+    // Try to get video URLs - prioritize HD quality (v3 API format)
+    const videoUrls = [
+      { url: extractUrl(data.videoHD), quality: 'HD' },
+      { url: extractUrl(data.videoSD), quality: 'SD' },
+      { url: extractUrl(data.video?.noWatermark), quality: 'No Watermark' },
+      { url: extractUrl(data.video?.playAddr), quality: 'playAddr' },
+      { url: extractUrl(data.video?.downloadAddr), quality: 'downloadAddr' },
+      { url: extractUrl(data.video?.play), quality: 'play' },
+      { url: extractUrl(data.video), quality: 'video' }
+    ].filter(item => item.url);
     
     // Try to get thumbnail/cover URL (v3 API doesn't have cover, v1 might)
     const thumbnailUrl = extractUrl(data.cover) ||
@@ -138,19 +142,12 @@ class TikTokService {
     // Log available keys for debugging
     logger.debug(`Video data keys: ${Object.keys(data).join(', ')}`);
     
-    // Determine quality for logging
-    let quality = 'Unknown';
-    if (data.videoHD) quality = 'HD';
-    else if (data.videoSD) quality = 'SD';
-    else if (data.video?.noWatermark) quality = 'No Watermark';
-    else if (data.video?.ratio) quality = data.video.ratio;
-    
-    if (!videoUrl) {
+    if (videoUrls.length === 0) {
       logger.error(`Video data structure keys: ${Object.keys(data).join(', ')}`);
       throw new Error('No video URL found in TikTok API response');
     }
 
-    logger.info(`Found ${quality} video URL, downloading...`);
+    logger.info(`Found ${videoUrls.length} video URLs, will try them in order...`);
     if (thumbnailUrl) {
       logger.info('Found thumbnail URL in API response');
     } else {
@@ -187,27 +184,120 @@ class TikTokService {
     }
 
     try {
-      const videoResponse = await axios.get(videoUrl, {
-        responseType: 'arraybuffer',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Referer': 'https://www.tiktok.com/',
-          'Accept': '*/*'
-        },
-        timeout: 120000, // 2 minutes for large videos
-        maxContentLength: 100 * 1024 * 1024 // 100MB max
-      });
+      let videoResponse = null;
+      let lastError = null;
 
-      await fs.writeFile(videoPath, videoResponse.data);
+      for (const item of videoUrls) {
+        try {
+          logger.info(`Trying to download ${item.quality} video URL...`);
+          const streamResponse = await axios.get(item.url, {
+            responseType: 'stream',
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Referer': 'https://www.tiktok.com/',
+              'Accept': '*/*'
+            },
+            timeout: 15000 // 15 sec to establish connection and get headers
+          });
+
+          const contentLength = parseInt(streamResponse.headers['content-length'] || '0', 10);
+          if (contentLength > 50 * 1024 * 1024) {
+            streamResponse.data.destroy();
+            throw new Error(`File too large (${(contentLength / 1024 / 1024).toFixed(2)} MB), max 50MB allowed`);
+          }
+
+          const fsSync = require('fs');
+          const writer = fsSync.createWriteStream(videoPath);
+          let downloadedBytes = 0;
+          
+          await new Promise((resolve, reject) => {
+            streamResponse.data.on('data', (chunk) => {
+              downloadedBytes += chunk.length;
+              if (downloadedBytes > 50 * 1024 * 1024) {
+                streamResponse.data.destroy();
+                writer.destroy();
+                reject(new Error('maxContentLength size of 52428800 exceeded during streaming'));
+              }
+            });
+            streamResponse.data.pipe(writer);
+            writer.on('finish', resolve);
+            writer.on('error', reject);
+            streamResponse.data.on('error', reject);
+          });
+          
+          logger.info(`Successfully downloaded ${item.quality} video URL`);
+          videoResponse = true;
+          break; // Success
+        } catch (err) {
+          logger.warn(`Failed to download ${item.quality} video URL: ${err.message}`);
+          lastError = err;
+          await fs.unlink(videoPath).catch(() => {}); // Clean up partial file
+        }
+      }
+
+      if (!videoResponse) {
+        throw lastError || new Error('All video URLs failed to download');
+      }
       
       let finalVideoPath = videoPath;
       let fileSizeMB;
+      
+      // Check audio bitrate and merge music track only if audio is low quality (<96kbps)
+      const musicUrl = extractUrl(data.music?.playUrl) || extractUrl(data.music?.play_url);
+      if (musicUrl) {
+        try {
+          const { execSync } = require('child_process');
+          // Probe audio bitrate of downloaded video
+          const audioBitrateStr = execSync(
+            `ffprobe -v error -select_streams a:0 -show_entries stream=bit_rate -of default=noprint_wrappers=1:nokey=1 "${videoPath}"`,
+            { encoding: 'utf8', timeout: 10000 }
+          ).trim();
+          const audioBitrate = parseInt(audioBitrateStr) || 0;
+          logger.info(`Video audio bitrate: ${Math.round(audioBitrate / 1000)}kbps`);
+          
+          if (audioBitrate > 0 && audioBitrate < 96000) {
+            logger.info('Low audio bitrate detected, downloading separate music track...');
+            const musicResponse = await axios.get(musicUrl, {
+              responseType: 'arraybuffer',
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://www.tiktok.com/',
+                'Accept': '*/*'
+              },
+              timeout: 30000
+            });
+            
+            const musicFilename = generateFilename('tiktok_music', 'mp3');
+            const musicPath = path.join(config.download.tempDir, musicFilename);
+            await fs.writeFile(musicPath, musicResponse.data);
+            
+            // Merge: take video from original, audio from music track
+            const mergedPath = videoPath.replace('.mp4', '_merged.mp4');
+            
+            execSync(
+              `ffmpeg -y -i "${videoPath}" -i "${musicPath}" -c:v copy -map 0:v:0 -map 1:a:0 -shortest -movflags +faststart "${mergedPath}"`,
+              { stdio: 'ignore', timeout: 60000 }
+            );
+            
+            // Replace original with merged version
+            await fs.unlink(videoPath);
+            await fs.unlink(musicPath).catch(() => {});
+            finalVideoPath = mergedPath;
+            
+            logger.info('Merged video with high-quality music track');
+          } else {
+            logger.info('Audio quality is acceptable, skipping music merge');
+          }
+        } catch (musicError) {
+          logger.warn(`Music merge check failed, using original audio: ${musicError.message}`);
+        }
+      }
       
       // Check frame rate and re-encode if too high (>60fps causes playback issues on Telegram/mobile)
       try {
         const { execSync } = require('child_process');
         const fpsOutput = execSync(
-          `ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 "${videoPath}"`,
+          `ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 "${finalVideoPath}"`,
           { encoding: 'utf8', timeout: 10000 }
         ).trim();
         
@@ -220,15 +310,15 @@ class TikTokService {
         if (fps > 60) {
           logger.warn(`High frame rate detected (${fps.toFixed(0)}fps), re-encoding to 30fps for Telegram compatibility`);
           
-          const reencodedPath = videoPath.replace('.mp4', '_30fps.mp4');
+          const reencodedPath = finalVideoPath.replace('.mp4', '_30fps.mp4');
           
           execSync(
-            `ffmpeg -i "${videoPath}" -r 30 -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -movflags +faststart "${reencodedPath}"`,
+            `ffmpeg -i "${finalVideoPath}" -r 30 -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -movflags +faststart "${reencodedPath}"`,
             { stdio: 'ignore', timeout: 180000 } // 3 minutes timeout
           );
           
           // Replace original with re-encoded version
-          await fs.unlink(videoPath);
+          await fs.unlink(finalVideoPath);
           finalVideoPath = reencodedPath;
           
           const stats = await fs.stat(finalVideoPath);
@@ -236,14 +326,14 @@ class TikTokService {
           
           logger.info(`Re-encoded to 30fps: ${fileSizeMB}MB`);
         } else {
-          const fileSizeBytes = videoResponse.data.length;
-          fileSizeMB = (fileSizeBytes / (1024 * 1024)).toFixed(2);
+          const stats = await fs.stat(finalVideoPath);
+          fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
           logger.info(`TikTok video downloaded: ${fileSizeMB}MB`);
         }
       } catch (fpsError) {
         logger.warn(`Frame rate check failed: ${fpsError.message} - using original video`);
-        const fileSizeBytes = videoResponse.data.length;
-        fileSizeMB = (fileSizeBytes / (1024 * 1024)).toFixed(2);
+        const stats = await fs.stat(finalVideoPath);
+        fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
         logger.info(`TikTok video downloaded: ${fileSizeMB}MB`);
       }
 
@@ -307,6 +397,12 @@ class TikTokService {
         }
       }
 
+      // Determine quality label from actual resolution
+      const actualQuality = height >= 1920 || width >= 1920 ? '1080p FullHD'
+                          : height >= 1280 || width >= 1280 ? '720p HD'
+                          : height >= 1024 || width >= 1024 ? `${Math.min(width, height)}p`
+                          : `${Math.min(width, height)}p`;
+
       return {
         type: 'video',
         filePath: finalVideoPath,
@@ -317,7 +413,7 @@ class TikTokService {
           platform: 'TikTok',
           duration: durationStr,
           fileSize: `${fileSizeMB} MB`,
-          quality: quality
+          quality: actualQuality
         },
         width: width,
         height: height,

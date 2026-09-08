@@ -2,7 +2,7 @@ const youtubedlExec = require('youtube-dl-exec');
 const path = require('path');
 const fs = require('fs').promises;
 const axios = require('axios');
-const { generateFilename, ensureDir } = require('../utils/helpers');
+const { generateFilename, ensureDir, prepareThumbnail, generateThumbnailFromVideo } = require('../utils/helpers');
 const config = require('../config');
 const logger = require('../utils/logger');
 const tiktokService = require('./tiktok.service');
@@ -329,11 +329,23 @@ class VideoService {
         );
         
         if (thumbFile) {
-          thumbnailDownloaded = path.join(config.download.tempDir, thumbFile);
-          logger.info(`Found thumbnail: ${thumbFile}`);
+          const rawThumbPath = path.join(config.download.tempDir, thumbFile);
+          logger.info(`Found raw thumbnail: ${thumbFile}`);
+          // Process through prepareThumbnail to meet Telegram's 320px/200KB limits
+          thumbnailDownloaded = await prepareThumbnail(rawThumbPath);
+          // Clean up the raw thumbnail if a new one was created
+          if (thumbnailDownloaded && thumbnailDownloaded !== rawThumbPath) {
+            await fs.unlink(rawThumbPath).catch(() => {});
+          }
         }
       } catch (error) {
-        logger.warn(`Could not find thumbnail: ${error.message}`);
+        logger.warn(`Could not find/process thumbnail: ${error.message}`);
+      }
+
+      // If no thumbnail was found from yt-dlp, generate one from the video
+      if (!thumbnailDownloaded) {
+        logger.info('No thumbnail from yt-dlp, generating from video...');
+        thumbnailDownloaded = await generateThumbnailFromVideo(downloadedFilePath);
       }
 
       let width = 1280, height = 720, duration = 0, title = 'Video', author = 'Unknown';

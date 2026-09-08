@@ -2,7 +2,7 @@ const TiktokDL = require('@tobyg74/tiktok-api-dl');
 const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
-const { generateFilename, ensureDir } = require('../utils/helpers');
+const { generateFilename, ensureDir, generateThumbnailFromVideo } = require('../utils/helpers');
 const config = require('../config');
 const logger = require('../utils/logger');
 
@@ -17,84 +17,92 @@ class TikTokService {
       
       await ensureDir(config.download.tempDir);
 
-      let result;
-      let version = 'tikwm';
-      
-      // Try tikwm first (reliable 720p HD, small file size), then v3 (FullHD but unpredictable size), then v2/v1
-      try {
-        const tikwmResponse = await axios.post('https://www.tikwm.com/api/', { url: url, hd: 1 }, { timeout: 15000 });
-        if (tikwmResponse.data && tikwmResponse.data.code === 0) {
-          const twData = tikwmResponse.data.data;
-          result = {
-            status: 'success',
-            result: {
-              type: twData.images ? 'image' : 'video',
-              videoHD: twData.hdplay || twData.play,
-              cover: twData.cover,
-              images: twData.images,
-              desc: twData.title,
-              author: { nickname: twData.author?.nickname || twData.author?.unique_id },
-              music: twData.music_info?.play ? { playUrl: [twData.music_info.play] } : undefined
-            }
-          };
-        } else {
-          throw new Error(tikwmResponse.data?.msg || 'tikwm failed');
-        }
-      } catch (twError) {
-        logger.warn(`tikwm API failed, trying v3: ${twError.message}`);
-        version = 'v3';
-        
+      // Call v3 and tikwm APIs in parallel for best coverage
+      const [v3Result, tikwmResult] = await Promise.allSettled([
+        TiktokDL.Downloader(url, { version: "v3" }).then(r => {
+          if (r.status !== 'success') throw new Error('v3 failed');
+          return r;
+        }),
+        axios.post('https://www.tikwm.com/api/', { url: url, hd: 1 }, { timeout: 15000 }).then(r => {
+          if (!r.data || r.data.code !== 0) throw new Error(r.data?.msg || 'tikwm failed');
+          return r.data.data;
+        })
+      ]);
+
+      const v3Data = v3Result.status === 'fulfilled' ? v3Result.value.result : null;
+      const twData = tikwmResult.status === 'fulfilled' ? tikwmResult.value : null;
+
+      if (v3Result.status === 'rejected') logger.warn(`v3 API failed: ${v3Result.reason.message}`);
+      if (tikwmResult.status === 'rejected') logger.warn(`tikwm API failed: ${tikwmResult.reason.message}`);
+
+      if (!v3Data && !twData) {
+        // Both failed, try v2/v1 as last resort
+        logger.warn('Both v3 and tikwm failed, trying v2/v1');
+        let result;
         try {
-          result = await TiktokDL.Downloader(url, { version: "v3" });
-          if (result.status !== 'success') {
-            throw new Error('v3 failed');
-          }
-        } catch (v3Error) {
-          logger.warn(`v3 API failed, trying v2: ${v3Error.message}`);
-          version = 'v2';
-          
-          try {
-            result = await TiktokDL.Downloader(url, { version: "v2" });
-            if (result.status !== 'success') {
-              throw new Error('v2 failed');
-            }
-          } catch (v2Error) {
-            logger.warn(`v2 API failed, trying v1: ${v2Error.message}`);
-            version = 'v1';
-            try {
-              result = await TiktokDL.Downloader(url, { version: "v1" });
-              if (result.status !== 'success') {
-                throw new Error('All TikTok APIs failed');
-              }
-            } catch (v1Error) {
-              throw new Error(`TikTok API error: all sources failed`);
-            }
-          }
+          result = await TiktokDL.Downloader(url, { version: "v2" });
+          if (result.status !== 'success') throw new Error('v2 failed');
+        } catch (v2Error) {
+          logger.warn(`v2 failed: ${v2Error.message}, trying v1`);
+          result = await TiktokDL.Downloader(url, { version: "v1" });
+          if (result.status !== 'success') throw new Error('All TikTok APIs failed');
         }
+        const data = result.result;
+        logger.info(`TikTok data type: ${data.type}`);
+        if (data.type === 'video') return await this._downloadVideo(data, url);
+        if (data.type === 'image') return await this._downloadSlideshow(data, result);
+        throw new Error(`Unknown TikTok content type: ${data.type}`);
       }
 
-      logger.info(`TikTok API response status: ${result.status} (using ${version})`);
+      // Determine content type
+      const contentType = v3Data?.type || (twData?.images ? 'image' : 'video');
+      logger.info(`TikTok data type: ${contentType}`);
 
-      const data = result.result;
-      
-      logger.info(`TikTok data type: ${data.type}`);
-      logger.debug(`Available keys: ${Object.keys(data).join(', ')}`);
-      
-      if (data.author) {
-        logger.debug(`author keys: ${Object.keys(data.author).join(', ')}`);
-      }
+      if (contentType === 'video') {
+        // Merge video URLs from both APIs into priority-ordered list
+        // v3 HD (1080p) > tikwm HD (720p) > v3 SD (576p)
+        const mergedData = {
+          _videoUrls: [],
+          desc: v3Data?.desc || twData?.title,
+          author: v3Data?.author || (twData?.author ? { nickname: twData.author.nickname || twData.author.unique_id } : undefined),
+          cover: twData?.cover || undefined,
+          music: twData?.music_info?.play ? { playUrl: [twData.music_info.play] } : (v3Data?.music || undefined)
+        };
 
-      // Handle video type
-      if (data.type === 'video') {
-        return await this._downloadVideo(data, url);
+        // Add v3 HD URL (1080p, may be large)
+        if (v3Data?.videoHD) {
+          mergedData._videoUrls.push({ url: v3Data.videoHD, quality: 'v3 HD (1080p)' });
+        }
+        // Add tikwm HD URL (720p, reliable size)
+        if (twData?.hdplay) {
+          mergedData._videoUrls.push({ url: twData.hdplay, quality: 'tikwm HD (720p)' });
+        } else if (twData?.play) {
+          mergedData._videoUrls.push({ url: twData.play, quality: 'tikwm play' });
+        }
+        // Add v3 SD URL (576p, last resort)
+        if (v3Data?.videoSD) {
+          mergedData._videoUrls.push({ url: v3Data.videoSD, quality: 'v3 SD (576p)' });
+        }
+
+        logger.info(`Merged ${mergedData._videoUrls.length} video URLs from APIs`);
+        logger.debug(`URL priorities: ${mergedData._videoUrls.map(u => u.quality).join(' > ')}`);
+
+        return await this._downloadVideo(mergedData, url);
       }
       
       // Handle slideshow/image type
-      if (data.type === 'image') {
-        return await this._downloadSlideshow(data, result);
+      if (contentType === 'image') {
+        const data = twData ? {
+          type: 'image',
+          images: twData.images,
+          desc: twData.title,
+          author: { nickname: twData.author?.nickname || twData.author?.unique_id },
+          music: twData.music_info?.play ? { playUrl: [twData.music_info.play] } : undefined
+        } : v3Data;
+        return await this._downloadSlideshow(data, { result: data });
       }
 
-      throw new Error(`Unknown TikTok content type: ${data.type}`);
+      throw new Error(`Unknown TikTok content type: ${contentType}`);
     } catch (error) {
       logger.error(`TikTok download error: ${error.message}`);
       throw error;
@@ -120,8 +128,8 @@ class TikTokService {
       return null;
     };
     
-    // Try to get video URLs - prioritize HD quality (v3 API format)
-    const videoUrls = [
+    // Use pre-merged URL list from parallel API calls, or build from single-API response
+    const videoUrls = data._videoUrls || [
       { url: extractUrl(data.videoHD), quality: 'HD' },
       { url: extractUrl(data.videoSD), quality: 'SD' },
       { url: extractUrl(data.video?.noWatermark), quality: 'No Watermark' },
@@ -131,7 +139,7 @@ class TikTokService {
       { url: extractUrl(data.video), quality: 'video' }
     ].filter(item => item.url);
     
-    // Try to get thumbnail/cover URL (v3 API doesn't have cover, v1 might)
+    // Try to get thumbnail/cover URL
     const thumbnailUrl = extractUrl(data.cover) ||
                          extractUrl(data.thumbnail) ||
                          extractUrl(data.originCover) ||
@@ -139,49 +147,15 @@ class TikTokService {
                          extractUrl(data.video?.cover) ||
                          extractUrl(data.video?.originCover);
     
-    // Log available keys for debugging
-    logger.debug(`Video data keys: ${Object.keys(data).join(', ')}`);
-    
     if (videoUrls.length === 0) {
-      logger.error(`Video data structure keys: ${Object.keys(data).join(', ')}`);
       throw new Error('No video URL found in TikTok API response');
     }
 
-    logger.info(`Found ${videoUrls.length} video URLs, will try them in order...`);
-    if (thumbnailUrl) {
-      logger.info('Found thumbnail URL in API response');
-    } else {
-      logger.info('No thumbnail URL in API response, will extract from video');
-    }
-    
     const videoFilename = generateFilename('tiktok_video', 'mp4');
     const videoPath = path.join(config.download.tempDir, videoFilename);
     
-    // Will be set after video download if we need to extract thumbnail
+    // Will be extracted from video after download for perfect quality and aspect ratio
     let thumbnailPath = null;
-    
-    // Download thumbnail from URL if available
-    if (thumbnailUrl) {
-      try {
-        const thumbFilename = generateFilename('tiktok_thumb', 'jpg');
-        thumbnailPath = path.join(config.download.tempDir, thumbFilename);
-        
-        const thumbResponse = await axios.get(thumbnailUrl, {
-          responseType: 'arraybuffer',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Referer': 'https://www.tiktok.com/'
-          },
-          timeout: 15000
-        });
-        
-        await fs.writeFile(thumbnailPath, thumbResponse.data);
-        logger.info('Downloaded thumbnail from URL');
-      } catch (thumbError) {
-        logger.warn(`Failed to download thumbnail: ${thumbError.message}`);
-        thumbnailPath = null;
-      }
-    }
 
     try {
       let videoResponse = null;
@@ -373,28 +347,9 @@ class TikTokService {
         logger.warn(`Failed to get video metadata: ${probeError.message}`);
       }
 
-      // Extract thumbnail from video if not downloaded from API
+      // Extract thumbnail from video (scaled to Telegram's 320px/200KB limits)
       if (!thumbnailPath) {
-        try {
-          const { execSync } = require('child_process');
-          const thumbFilename = generateFilename('tiktok_thumb', 'jpg');
-          thumbnailPath = path.join(config.download.tempDir, thumbFilename);
-          
-          // Extract frame at 1 second (or 0.5 seconds for short videos)
-          const seekTime = durationSeconds > 2 ? '1' : '0.5';
-          
-          execSync(
-            `ffmpeg -y -ss ${seekTime} -i "${finalVideoPath}" -vframes 1 -q:v 2 "${thumbnailPath}"`,
-            { stdio: 'ignore', timeout: 10000 }
-          );
-          
-          // Verify thumbnail was created
-          await fs.access(thumbnailPath);
-          logger.info('Extracted thumbnail from video');
-        } catch (thumbError) {
-          logger.warn(`Failed to extract thumbnail: ${thumbError.message}`);
-          thumbnailPath = null;
-        }
+        thumbnailPath = await generateThumbnailFromVideo(finalVideoPath);
       }
 
       // Determine quality label from actual resolution

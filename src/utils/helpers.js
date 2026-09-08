@@ -199,6 +199,127 @@ function getInstagramImgIndex(url) {
 const { Input } = require('telegraf');
 const config = require('../config');
 
+/**
+ * Prepare a thumbnail image to meet Telegram Bot API requirements:
+ * - JPEG format
+ * - Max 320px on longest side (preserving aspect ratio)
+ * - Max 200KB file size
+ * 
+ * @param {string} inputPath - Path to input image (any format ffmpeg supports)
+ * @param {string} [outputPath] - Optional output path. If not provided, generates one.
+ * @returns {Promise<string|null>} Path to prepared thumbnail, or null on failure
+ */
+async function prepareThumbnail(inputPath, outputPath = null) {
+  try {
+    const { execSync } = require('child_process');
+    
+    if (!outputPath) {
+      outputPath = path.join(
+        config.download.tempDir,
+        generateFilename('thumb_prepared', 'jpg')
+      );
+    }
+    
+    // Scale to max 320px on longest side, convert to JPEG
+    // Use q:v 5 initially (good quality, small size)
+    execSync(
+      `ffmpeg -y -i "${inputPath}" -vf "scale='if(gt(iw,ih),min(320,iw),-2)':'if(gt(iw,ih),-2,min(320,ih))'" -frames:v 1 -q:v 5 "${outputPath}"`,
+      { stdio: 'ignore', timeout: 10000 }
+    );
+    
+    // Check file size - must be under 200KB
+    const stats = await fs.stat(outputPath);
+    
+    if (stats.size > 200 * 1024) {
+      // Re-encode with lower quality to fit under 200KB
+      const tempPath = outputPath + '.tmp.jpg';
+      execSync(
+        `ffmpeg -y -i "${outputPath}" -q:v 10 "${tempPath}"`,
+        { stdio: 'ignore', timeout: 10000 }
+      );
+      await fs.unlink(outputPath);
+      await fs.rename(tempPath, outputPath);
+      
+      const newStats = await fs.stat(outputPath);
+      if (newStats.size > 200 * 1024) {
+        // Still too large - try even lower quality with forced smaller size
+        const tempPath2 = outputPath + '.tmp2.jpg';
+        execSync(
+          `ffmpeg -y -i "${outputPath}" -vf "scale='if(gt(iw,ih),min(200,iw),-2)':'if(gt(iw,ih),-2,min(200,ih))'" -q:v 12 "${tempPath2}"`,
+          { stdio: 'ignore', timeout: 10000 }
+        );
+        await fs.unlink(outputPath);
+        await fs.rename(tempPath2, outputPath);
+      }
+    }
+    
+    const finalStats = await fs.stat(outputPath);
+    const logger = require('./logger');
+    logger.info(`Thumbnail prepared: ${finalStats.size} bytes, path: ${path.basename(outputPath)}`);
+    
+    return outputPath;
+  } catch (error) {
+    const logger = require('./logger');
+    logger.warn(`Failed to prepare thumbnail: ${error.message}`);
+    // Clean up on failure
+    try { await fs.unlink(outputPath); } catch {}
+    return null;
+  }
+}
+
+/**
+ * Generate a thumbnail from a video file, meeting Telegram requirements.
+ * Uses ffmpeg thumbnail filter to select the most representative frame.
+ * 
+ * @param {string} videoPath - Path to the video file
+ * @param {string} [outputPath] - Optional output path
+ * @returns {Promise<string|null>} Path to prepared thumbnail, or null on failure
+ */
+async function generateThumbnailFromVideo(videoPath, outputPath = null) {
+  try {
+    const { execSync } = require('child_process');
+    
+    if (!outputPath) {
+      outputPath = path.join(
+        config.download.tempDir,
+        generateFilename('thumb_gen', 'jpg')
+      );
+    }
+    
+    // Use thumbnail filter to pick the best frame, then scale to max 320px
+    execSync(
+      `ffmpeg -y -i "${videoPath}" -vf "thumbnail,scale='if(gt(iw,ih),min(320,iw),-2)':'if(gt(iw,ih),-2,min(320,ih))'" -frames:v 1 -q:v 5 "${outputPath}"`,
+      { stdio: 'ignore', timeout: 15000 }
+    );
+    
+    // Verify it was created
+    await fs.access(outputPath);
+    
+    // Check size and re-encode if needed
+    const stats = await fs.stat(outputPath);
+    if (stats.size > 200 * 1024) {
+      const tempPath = outputPath + '.tmp.jpg';
+      execSync(
+        `ffmpeg -y -i "${outputPath}" -q:v 10 "${tempPath}"`,
+        { stdio: 'ignore', timeout: 10000 }
+      );
+      await fs.unlink(outputPath);
+      await fs.rename(tempPath, outputPath);
+    }
+    
+    const finalStats = await fs.stat(outputPath);
+    const logger = require('./logger');
+    logger.info(`Video thumbnail generated: ${finalStats.size} bytes, path: ${path.basename(outputPath)}`);
+    
+    return outputPath;
+  } catch (error) {
+    const logger = require('./logger');
+    logger.warn(`Failed to generate thumbnail from video: ${error.message}`);
+    try { await fs.unlink(outputPath); } catch {}
+    return null;
+  }
+}
+
 function getFileForTelegram(filePath) {
   if (config.botApiUrl && (config.botApiUrl.includes('localhost') || config.botApiUrl.includes('127.0.0.1'))) {
     return 'file://' + path.resolve(filePath);
@@ -213,6 +334,8 @@ module.exports = {
   generateFilename,
   getUserInfo,
   getFileForTelegram,
+  prepareThumbnail,
+  generateThumbnailFromVideo,
   isValidVideoUrl,
   isTikTokPhotoUrl,
   isTikTokUrl,

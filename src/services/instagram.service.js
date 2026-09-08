@@ -2,7 +2,7 @@ const { igdl } = require('btch-downloader');
 const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
-const { generateFilename, ensureDir } = require('../utils/helpers');
+const { generateFilename, ensureDir, generateThumbnailFromVideo } = require('../utils/helpers');
 const config = require('../config');
 const logger = require('../utils/logger');
 
@@ -183,26 +183,7 @@ class InstagramService {
 
           let thumbnailPath = null;
           if (mediaType === 'video') {
-            const thumbPath = mediaPath.replace(/\.mp4$/, '_thumb.jpg');
-            try {
-              const { execSync } = require('child_process');
-              execSync(
-                `ffmpeg -y -i "${mediaPath}" -ss 00:00:01 -vframes 1 -f image2 "${thumbPath}"`,
-                { stdio: 'ignore', timeout: 5000 }
-              );
-              thumbnailPath = thumbPath;
-            } catch (e) {
-              try {
-                const { execSync } = require('child_process');
-                execSync(
-                  `ffmpeg -y -i "${mediaPath}" -ss 00:00:00 -vframes 1 -f image2 "${thumbPath}"`,
-                  { stdio: 'ignore', timeout: 5000 }
-                );
-                thumbnailPath = thumbPath;
-              } catch (err) {
-                logger.warn(`Could not generate thumbnail for video: ${err.message}`);
-              }
-            }
+            thumbnailPath = await generateThumbnailFromVideo(mediaPath);
           }
 
           downloadedMedia.push({ 

@@ -1,10 +1,12 @@
+const fs = require('fs').promises;
 const path = require('path');
+const axios = require('axios');
 const config = require('../config');
 const videoService = require('../services/video.service');
 const audioService = require('../services/audio.service');
 const settingsService = require('../services/settings.service');
 const logger = require('../utils/logger');
-const { extractUrl, getUserInfo, cleanupFile, getFileForTelegram, isValidVideoUrl, isTikTokPhotoUrl, isTikTokUrl, isYouTubeUrl, isInstagramUrl, isInstagramPostUrl, getInstagramImgIndex } = require('../utils/helpers');
+const { extractUrl, getUserInfo, cleanupFile, getFileForTelegram, isValidVideoUrl, isTikTokPhotoUrl, isTikTokUrl, isYouTubeUrl, isInstagramUrl, isInstagramPostUrl, getInstagramImgIndex, generateFilename } = require('../utils/helpers');
 
 const userRequests = new Map();
 const MAX_REQUESTS = 5;
@@ -446,6 +448,13 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
           
           logger.info(`Sending ${result.imagePaths.length} images in ${batches.length} batch(es)`);
           
+          // Build caption for the last batch
+          const titleText = truncateTitle(result.info.title, 800);
+          const slideshowCaption = `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>
+
+<blockquote expandable>${titleText ? titleText + '\n' : ''}👤 ${result.info.author}
+📱 ${result.info.platform}</blockquote>`.trim();
+          
           // Send each batch as a separate media group
           for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
             const batch = batches[batchIndex];
@@ -455,15 +464,25 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
               type: 'photo',
               media: getFileForTelegram(imagePath),
               // Only add caption to first image of last batch
-              caption: isLastBatch && index === 0 ? `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>
-
-<blockquote expandable>${result.info.title}
-👤 ${result.info.author}
-📱 ${result.info.platform}</blockquote>`.trim() : undefined,
+              caption: isLastBatch && index === 0 ? slideshowCaption : undefined,
               parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined
             }));
             
-            await ctx.replyWithMediaGroup(mediaGroup);
+            try {
+              await ctx.replyWithMediaGroup(mediaGroup);
+            } catch (sendError) {
+              // If caption is too long, retry without caption
+              if (sendError.message?.includes('caption is too long') || sendError.description?.includes('caption is too long')) {
+                logger.warn(`Caption too long for batch ${batchIndex + 1}, retrying without caption`);
+                const fallbackGroup = batch.map((imagePath) => ({
+                  type: 'photo',
+                  media: getFileForTelegram(imagePath),
+                }));
+                await ctx.replyWithMediaGroup(fallbackGroup);
+              } else {
+                throw sendError;
+              }
+            }
             logger.info(`Sent batch ${batchIndex + 1}/${batches.length} (${batch.length} images)`);
           }
           
@@ -1040,6 +1059,7 @@ async function processYouTubeDownload(ctx, url, userInfo, originalMessageId) {
     if (sentVideo?.video?.file_id) {
       pendingAudioExtracts.set(sentVideo.message_id, {
         videoFileId: sentVideo.video.file_id,
+        thumbnailFileId: sentVideo.video.thumbnail?.file_id || sentVideo.video.thumb?.file_id,
         userId: ctx.from.id,
         title: result.info.title,
         author: result.info.author
@@ -1097,6 +1117,20 @@ async function handleMp3Command(ctx) {
     return;
   }
   
+  let title = 'Audio';
+  let author = 'Unknown';
+  
+  // Try to extract title and author from the original message caption
+  if (replyMessage.caption) {
+    const titleMatch = replyMessage.caption.match(/🎬\s+([^\n]+)/);
+    if (titleMatch) title = titleMatch[1].trim();
+    
+    const authorMatch = replyMessage.caption.match(/👤\s+([^\n]+)/);
+    if (authorMatch) author = authorMatch[1].trim();
+  }
+  
+  const thumbnailFileId = video.thumbnail?.file_id || video.thumb?.file_id;
+  
   const userInfo = getUserInfo(ctx);
   logger.info(`MP3 extraction requested by ${userInfo}`);
   
@@ -1104,12 +1138,31 @@ async function handleMp3Command(ctx) {
   
   let videoPath = null;
   let audioResult = null;
+  let thumbPath = null;
   
   try {
     const videoFile = await getVideoLocalPath(ctx, video.file_id);
     if (videoFile.needsCleanup) videoPath = videoFile.localPath;
     
-    audioResult = await audioService.convertToMp3(videoFile.localPath);
+    if (thumbnailFileId) {
+      try {
+        const thumbFile = await ctx.telegram.getFile(thumbnailFileId);
+        thumbPath = path.join(config.download.tempDir, generateFilename('audio_thumb', 'jpg'));
+        
+        if (thumbFile.file_path && thumbFile.file_path.startsWith('/')) {
+          await fs.copyFile(thumbFile.file_path, thumbPath);
+        } else {
+          const thumbLink = await ctx.telegram.getFileLink(thumbnailFileId);
+          const thumbRes = await axios.get(thumbLink.href, { responseType: 'arraybuffer' });
+          await fs.writeFile(thumbPath, thumbRes.data);
+        }
+      } catch (err) {
+        logger.warn(`Failed to download thumbnail for audio: ${err.message}`);
+        thumbPath = null;
+      }
+    }
+    
+    audioResult = await audioService.convertToMp3(videoFile.localPath, thumbPath);
     
     await ctx.telegram.editMessageText(
       ctx.chat.id,
@@ -1118,18 +1171,24 @@ async function handleMp3Command(ctx) {
       '📤 Uploading audio...'
     );
     
+    const audioOptions = {
+      title: (title !== 'Audio' ? title : null) || (audioResult.title !== 'Audio' ? audioResult.title : undefined),
+      performer: (author !== 'Unknown' ? author : null) || (audioResult.artist !== 'Unknown' ? audioResult.artist : undefined),
+      duration: audioResult.duration || undefined,
+      reply_to_message_id: replyMessage.message_id
+    };
+    
+    if (thumbPath) {
+      audioOptions.thumbnail = getFileForTelegram(thumbPath);
+    }
+    
     await ctx.replyWithAudio(
       getFileForTelegram(audioResult.audioPath),
-      {
-        title: audioResult.title !== 'Audio' ? audioResult.title : undefined,
-        performer: audioResult.artist !== 'Unknown' ? audioResult.artist : undefined,
-        duration: audioResult.duration || undefined,
-        reply_to_message_id: replyMessage.message_id
-      }
+      audioOptions
     );
     
     await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-    logger.info(`Audio sent successfully to ${userInfo}`);
+    logger.info(`MP3 sent successfully to ${userInfo}`);
     
   } catch (error) {
     logger.error(`MP3 extraction failed for ${userInfo}: ${error.message}`);
@@ -1142,6 +1201,7 @@ async function handleMp3Command(ctx) {
   } finally {
     if (videoPath) await cleanupFile(videoPath);
     if (audioResult?.audioPath) await cleanupFile(audioResult.audioPath);
+    if (thumbPath) await cleanupFile(thumbPath);
   }
 }
 
@@ -1170,21 +1230,41 @@ async function handleAudioCallback(ctx) {
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
   } catch {}
   
-  await processAudioExtraction(ctx, pending.videoFileId, userId, pending.title, pending.author);
+  await processAudioExtraction(ctx, pending.videoFileId, userId, pending.title, pending.author, pending.thumbnailFileId);
 }
 
-async function processAudioExtraction(ctx, videoFileId, userId, title, author) {
+// Extract audio from a video file ID
+async function processAudioExtraction(ctx, videoFileId, userId, title, author, thumbnailFileId) {
   const userInfo = getUserInfo(ctx);
   const statusMessage = await ctx.reply('🎵 Extracting audio...');
   
   let videoPath = null;
   let audioResult = null;
+  let thumbPath = null;
   
   try {
     const videoFile = await getVideoLocalPath(ctx, videoFileId);
     if (videoFile.needsCleanup) videoPath = videoFile.localPath;
     
-    audioResult = await audioService.convertToMp3(videoFile.localPath);
+    if (thumbnailFileId) {
+      try {
+        const thumbFile = await ctx.telegram.getFile(thumbnailFileId);
+        thumbPath = path.join(config.download.tempDir, generateFilename('audio_thumb', 'jpg'));
+        
+        if (thumbFile.file_path && thumbFile.file_path.startsWith('/')) {
+          await fs.copyFile(thumbFile.file_path, thumbPath);
+        } else {
+          const thumbLink = await ctx.telegram.getFileLink(thumbnailFileId);
+          const thumbRes = await axios.get(thumbLink.href, { responseType: 'arraybuffer' });
+          await fs.writeFile(thumbPath, thumbRes.data);
+        }
+      } catch (err) {
+        logger.warn(`Failed to download thumbnail for audio: ${err.message}`);
+        thumbPath = null;
+      }
+    }
+    
+    audioResult = await audioService.convertToMp3(videoFile.localPath, thumbPath);
     
     await ctx.telegram.editMessageText(
       ctx.chat.id,
@@ -1193,13 +1273,19 @@ async function processAudioExtraction(ctx, videoFileId, userId, title, author) {
       '📤 Uploading audio...'
     );
     
+    const audioOptions = {
+      title: title || (audioResult.title !== 'Audio' ? audioResult.title : undefined),
+      performer: author || (audioResult.artist !== 'Unknown' ? audioResult.artist : undefined),
+      duration: audioResult.duration || undefined
+    };
+    
+    if (thumbPath) {
+      audioOptions.thumbnail = getFileForTelegram(thumbPath);
+    }
+    
     await ctx.replyWithAudio(
       getFileForTelegram(audioResult.audioPath),
-      {
-        title: title || (audioResult.title !== 'Audio' ? audioResult.title : undefined),
-        performer: author || (audioResult.artist !== 'Unknown' ? audioResult.artist : undefined),
-        duration: audioResult.duration || undefined
-      }
+      audioOptions
     );
     
     await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
@@ -1216,6 +1302,7 @@ async function processAudioExtraction(ctx, videoFileId, userId, title, author) {
   } finally {
     if (videoPath) await cleanupFile(videoPath);
     if (audioResult?.audioPath) await cleanupFile(audioResult.audioPath);
+    if (thumbPath) await cleanupFile(thumbPath);
   }
 }
 

@@ -11,7 +11,7 @@ class AudioService {
    * @param {string} videoPath - absolute path to the video file
    * @returns {Promise<{audioPath: string, duration: number, title: string, artist: string, fileSize: number}>}
    */
-  async convertToMp3(videoPath) {
+  async convertToMp3(videoPath, thumbPath = null) {
     await ensureDir(config.download.tempDir);
     
     const audioFilename = generateFilename('audio', 'mp3');
@@ -41,10 +41,38 @@ class AudioService {
       }
       
       // Convert to MP3
-      execSync(
-        `ffmpeg -y -i "${videoPath}" -vn -acodec libmp3lame -ab 192k -ar 44100 "${audioPath}"`,
-        { stdio: 'ignore', timeout: 120000 }
-      );
+      let extractedThumb = null;
+      if (!thumbPath) {
+        const tempThumb = path.join(config.download.tempDir, `extracted_thumb_${Date.now()}.jpg`);
+        try {
+          // Try to extract the first frame
+          execSync(`ffmpeg -y -i "${videoPath}" -frames:v 1 -q:v 2 "${tempThumb}"`, { stdio: 'ignore' });
+          if (require('fs').existsSync(tempThumb)) {
+            thumbPath = tempThumb;
+            extractedThumb = tempThumb;
+          }
+        } catch (e) {
+          // Ignore errors, we'll just convert without thumbnail
+        }
+      }
+
+      try {
+        if (thumbPath) {
+          execSync(
+            `ffmpeg -y -i "${videoPath}" -i "${thumbPath}" -map 0:a:0? -map 1:v:0 -c:a libmp3lame -b:a 192k -ar 44100 -c:v copy -id3v2_version 3 -metadata:s:v title="Album cover" -metadata:s:v comment="Cover (front)" "${audioPath}"`,
+            { stdio: 'ignore', timeout: 120000 }
+          );
+        } else {
+          execSync(
+            `ffmpeg -y -i "${videoPath}" -map 0:a:0? -vn -c:a libmp3lame -b:a 192k -ar 44100 "${audioPath}"`,
+            { stdio: 'ignore', timeout: 120000 }
+          );
+        }
+      } finally {
+        if (extractedThumb) {
+          try { await fs.unlink(extractedThumb); } catch {}
+        }
+      }
       
       // Verify the file was created
       const stats = await fs.stat(audioPath);

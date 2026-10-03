@@ -896,11 +896,13 @@ ${qualityLine}</blockquote>`.trim(),
   } catch (error) {
     logger.error(`Download failed for ${userInfo}: ${error.message}`);
     
+    const safeErrorMsg = error.message ? error.message.replace(/[_*[\]`]/g, ' ') : 'Unknown error';
+    
     await ctx.telegram.editMessageText(
       ctx.chat.id,
       statusMessage.message_id,
       null,
-      `❌ ${error.message}\n\n*Troubleshooting:*\n• Ensure link is valid\n• Video must be public\n• Max size: ${ctx.telegram.options?.apiRoot?.includes('localhost') ? '2000' : '50'}MB\n• Platform must be supported`,
+      `❌ ${safeErrorMsg}\n\n*Troubleshooting:*\n• Ensure link is valid\n• Video must be public\n• Max size: ${ctx.telegram.options?.apiRoot?.includes('localhost') ? '2000' : '50'}MB\n• Platform must be supported`,
       { parse_mode: 'Markdown' }
     );
   } finally {

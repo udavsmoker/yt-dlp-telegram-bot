@@ -74,6 +74,7 @@ function isValidVideoUrl(url) {
     'twitter.com', 'x.com', 'facebook.com', 'fb.watch',
     'reddit.com', 'vimeo.com', 'dailymotion.com', 'twitch.tv',
     'streamable.com', 'soundcloud.com', 'bandcamp.com',
+    'bsky.app',
     // Extra domains loaded from local-domains.json (gitignored)
     ...(localConfig.extraDomains || [])
   ];
@@ -193,6 +194,28 @@ function getInstagramImgIndex(url) {
     return null;
   } catch {
     return null;
+  }
+}
+
+function isBlueskyUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    const hostname = urlObj.hostname.toLowerCase().replace('www.', '');
+    return hostname === 'bsky.app';
+  } catch {
+    return false;
+  }
+}
+
+function isBlueskyPostUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    const hostname = urlObj.hostname.toLowerCase().replace('www.', '');
+    if (hostname !== 'bsky.app') return false;
+    // Must match /profile/<actor>/post/<rkey>
+    return /^\/profile\/[^/]+\/post\/[^/]+/.test(urlObj.pathname);
+  } catch {
+    return false;
   }
 }
 
@@ -342,5 +365,7 @@ module.exports = {
   isYouTubeUrl,
   isInstagramUrl,
   isInstagramPostUrl,
-  getInstagramImgIndex
+  getInstagramImgIndex,
+  isBlueskyUrl,
+  isBlueskyPostUrl
 };

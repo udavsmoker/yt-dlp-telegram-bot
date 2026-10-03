@@ -6,7 +6,7 @@ const videoService = require('../services/video.service');
 const audioService = require('../services/audio.service');
 const settingsService = require('../services/settings.service');
 const logger = require('../utils/logger');
-const { extractUrl, getUserInfo, cleanupFile, getFileForTelegram, isValidVideoUrl, isTikTokPhotoUrl, isTikTokUrl, isYouTubeUrl, isInstagramUrl, isInstagramPostUrl, getInstagramImgIndex, generateFilename } = require('../utils/helpers');
+const { extractUrl, getUserInfo, cleanupFile, getFileForTelegram, isValidVideoUrl, isTikTokPhotoUrl, isTikTokUrl, isYouTubeUrl, isInstagramUrl, isInstagramPostUrl, getInstagramImgIndex, isBlueskyUrl, isBlueskyPostUrl, generateFilename } = require('../utils/helpers');
 
 const userRequests = new Map();
 const MAX_REQUESTS = 5;
@@ -195,6 +195,7 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
   try {
     let isTikTok = isTikTokUrl(url);
     let isInstagramPost = isInstagramPostUrl(url);
+    let isBluesky = isBlueskyPostUrl(url);
     let triedVideo = false;
     
     // Handle Instagram posts (photos/carousels)
@@ -353,6 +354,213 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
         logger.info(`Instagram post download failed, trying as video: ${instaError.message}`);
         isInstagramPost = false;
         // Fall through to try as video
+      }
+    }
+
+    // Handle Bluesky posts (videos/images)
+    if (isBluesky) {
+      logger.info('Detected Bluesky URL, trying AT Protocol API first');
+      
+      try {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          statusMessage.message_id,
+          null,
+          '⬇️ Downloading from Bluesky...'
+        );
+        
+        const result = await videoService.downloadBlueskyPost(url);
+        
+        // Handle video type
+        if (result.type === 'video') {
+          filePath = result.filePath;
+          thumbnailPath = result.thumbnailPath;
+          
+          logger.info('Bluesky video downloaded via API');
+          
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            statusMessage.message_id,
+            null,
+            '📤 Uploading to Telegram...'
+          );
+          
+          const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+          
+          const bskyMetaLines = [
+            result.info.title && result.info.title !== 'Bluesky Video' ? `${truncateTitle(result.info.title)}\n` : null,
+            `👤 ${result.info.author}`,
+            result.info.duration && result.info.duration !== 'Unknown' ? `⏱ ${result.info.duration}` : null,
+            `💾 ${result.info.fileSize}`,
+            `📱 ${result.info.platform}`,
+            result.info.quality ? `📊 ${result.info.quality}` : null
+          ].filter(Boolean).join('\n');
+          
+          const videoOptions = {
+            caption: `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${bskyMetaLines}</blockquote>`.trim(),
+            parse_mode: 'HTML',
+            supports_streaming: true,
+            width: result.width,
+            height: result.height,
+            duration: result.duration
+          };
+          
+          if (thumbnailPath) {
+            videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
+          }
+          
+          await ctx.replyWithVideo(
+            getFileForTelegram(result.filePath),
+            videoOptions
+          );
+          
+          try {
+            await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
+          } catch (error) {
+            logger.warn('Could not delete user message (bot might not have permissions)');
+          }
+          
+          await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+          
+          logger.info(`Bluesky video sent successfully to ${userInfo}`);
+          return;
+        }
+        
+        // Handle slideshow type (images)
+        if (result.type === 'slideshow') {
+          filesToCleanup = [...result.imagePaths];
+          
+          logger.info(`Bluesky images downloaded: ${result.imagePaths.length} image(s)`);
+          
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            statusMessage.message_id,
+            null,
+            '📤 Uploading photos to Telegram...'
+          );
+          
+          const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+          
+          const titleText = truncateTitle(result.info.title, 800);
+          const slideshowCaption = `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${titleText && titleText !== 'Bluesky Post' ? titleText + '\n' : ''}👤 ${result.info.author}\n💾 ${result.info.fileSize}\n📱 ${result.info.platform}</blockquote>`.trim();
+          
+          // Telegram allows max 10 media per group
+          const TELEGRAM_MEDIA_LIMIT = 10;
+          const batches = [];
+          
+          for (let i = 0; i < result.imagePaths.length; i += TELEGRAM_MEDIA_LIMIT) {
+            batches.push(result.imagePaths.slice(i, i + TELEGRAM_MEDIA_LIMIT));
+          }
+          
+          for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+            const batch = batches[batchIndex];
+            const isLastBatch = batchIndex === batches.length - 1;
+            
+            if (batch.length === 1 && batches.length === 1) {
+              await ctx.replyWithPhoto(
+                getFileForTelegram(batch[0]),
+                { caption: slideshowCaption, parse_mode: 'HTML' }
+              );
+            } else {
+              const mediaGroup = batch.map((imagePath, index) => ({
+                type: 'photo',
+                media: getFileForTelegram(imagePath),
+                caption: isLastBatch && index === 0 ? slideshowCaption : undefined,
+                parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined
+              }));
+              
+              await ctx.replyWithMediaGroup(mediaGroup);
+            }
+            logger.info(`Sent batch ${batchIndex + 1}/${batches.length} (${batch.length} image(s))`);
+          }
+          
+          try {
+            await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
+          } catch (error) {
+            logger.warn('Could not delete user message (bot might not have permissions)');
+          }
+          
+          await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+          
+          logger.info(`Bluesky images sent successfully to ${userInfo}`);
+          return;
+        }
+        
+      } catch (apiError) {
+        logger.info(`Bluesky API failed, trying yt-dlp fallback: ${apiError.message}`);
+        
+        // Cleanup any partial downloads
+        if (filePath) await cleanupFile(filePath);
+        if (thumbnailPath) await cleanupFile(thumbnailPath);
+        for (const file of filesToCleanup) await cleanupFile(file);
+        filePath = null;
+        thumbnailPath = null;
+        filesToCleanup = [];
+        
+        // If the error is about non-downloadable content, don't try yt-dlp
+        if (apiError.message.includes('only text') || apiError.message.includes('link card')) {
+          throw apiError;
+        }
+        
+        // Fall back to yt-dlp for video download
+        try {
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            statusMessage.message_id,
+            null,
+            '⬇️ Trying fallback download method...'
+          );
+          
+          const result = await videoService.download(url);
+          filePath = result.filePath;
+          thumbnailPath = result.thumbnailPath;
+          
+          logger.info('Bluesky video downloaded via yt-dlp fallback');
+          
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            statusMessage.message_id,
+            null,
+            '📤 Uploading to Telegram...'
+          );
+          
+          const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+          
+          const qualityLine = result.info.quality ? `📊 Quality: ${result.info.quality}\n` : '';
+          
+          const videoOptions = {
+            caption: `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${result.info.author}\n⏱ ${result.info.duration}\n💾 ${result.info.fileSize}\n📱 ${result.info.platform}\n${qualityLine}</blockquote>`.trim(),
+            parse_mode: 'HTML',
+            supports_streaming: true,
+            width: result.width,
+            height: result.height,
+            duration: result.duration
+          };
+          
+          if (thumbnailPath) {
+            videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
+          }
+          
+          await ctx.replyWithVideo(
+            getFileForTelegram(result.filePath),
+            videoOptions
+          );
+          
+          try {
+            await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
+          } catch (error) {
+            logger.warn('Could not delete user message (bot might not have permissions)');
+          }
+          
+          await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+          
+          logger.info(`Bluesky video (via yt-dlp) sent successfully to ${userInfo}`);
+          return;
+          
+        } catch (ytdlpError) {
+          logger.error('Both Bluesky API and yt-dlp failed');
+          throw apiError; // Throw the original API error
+        }
       }
     }
     

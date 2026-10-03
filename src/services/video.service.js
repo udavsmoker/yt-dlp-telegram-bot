@@ -7,6 +7,7 @@ const config = require('../config');
 const logger = require('../utils/logger');
 const tiktokService = require('./tiktok.service');
 const instagramService = require('./instagram.service');
+const blueskyService = require('./bluesky.service');
 
 // Load extra patterns from local config (gitignored)
 let localConfig = { extraDomains: [], hlsPatterns: [], problematicPatterns: [] };
@@ -475,6 +476,7 @@ class VideoService {
       if (hostname.includes('vimeo.com')) return 'Vimeo';
       if (hostname.includes('reddit.com')) return 'Reddit';
       if (hostname.includes('twitch.tv')) return 'Twitch';
+      if (hostname.includes('bsky.app')) return 'Bluesky';
       
       const parts = hostname.split('.');
       const domain = parts[parts.length - 2] || parts[0];
@@ -517,6 +519,14 @@ class VideoService {
    */
   async downloadInstagramPost(url, imgIndex = null) {
     return await instagramService.downloadInstagramPost(url, imgIndex);
+  }
+
+  /**
+   * Download Bluesky post (video/images) using the AT Protocol API
+   * Delegates to blueskyService for the actual download
+   */
+  async downloadBlueskyPost(url) {
+    return await blueskyService.downloadBlueskyPost(url);
   }
 }
 

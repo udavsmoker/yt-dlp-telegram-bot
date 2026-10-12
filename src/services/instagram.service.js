@@ -67,16 +67,32 @@ class InstagramService {
 
       logger.info(`btch-downloader found ${validItems.length} media item(s) (before dedup)`);
 
-      // btch-downloader returns multiple quality variants per media item.
-      // Deduplicate by the original filename embedded in the JWT token payload.
-      // Items without a decodable token keep their proxied URL as key.
+      // btch-downloader returns multiple CDN mirror/quality variants per carousel slide.
+      // payload.filename is the SAME for all slides, and CDN filenames differ across
+      // resolution variants, so neither works as a dedup key.
+      // The correct key is `ig_cache_key` from the inner CDN URL — it's the base64-encoded
+      // Instagram media ID, unique per carousel slide and consistent across quality variants.
       const seenKeys = new Set();
       const uniqueItems = validItems.filter(item => {
         try {
           const tokenMatch = item.url.match(/token=([^&]+)/);
           if (tokenMatch) {
             const payload = JSON.parse(Buffer.from(tokenMatch[1].split('.')[1], 'base64').toString());
-            const key = payload.filename || payload.url || item.url;
+            let key;
+            if (payload.url) {
+              try {
+                const innerUrl = new URL(payload.url);
+                // ig_cache_key is the Instagram media ID (unique per carousel slide)
+                key = innerUrl.searchParams.get('ig_cache_key');
+              } catch {}
+              // Fallback: extract the CDN filename from path
+              if (!key) {
+                const pathPart = payload.url.split('?')[0];
+                const segments = pathPart.split('/');
+                key = segments[segments.length - 1];
+              }
+            }
+            key = key || payload.url || item.url;
             if (seenKeys.has(key)) return false;
             seenKeys.add(key);
             return true;
@@ -104,6 +120,29 @@ class InstagramService {
       const mediaDetails = uniqueItems.map((item) => {
         const typeFromApi = typeof item.type === 'string' ? item.type.toLowerCase() : '';
         let isVideo = isReel || typeFromApi === 'video';
+        let directUrl = null;
+
+        // Check token payload if present
+        try {
+          const tokenMatch = item.url.match(/token=([^&]+)/);
+          if (tokenMatch) {
+            const payload = JSON.parse(Buffer.from(tokenMatch[1].split('.')[1], 'base64').toString());
+            directUrl = payload.url || null;
+            if (!isVideo) {
+              const filename = (payload.filename || '').toLowerCase();
+              const innerUrl = (payload.url || '').toLowerCase();
+              if (filename.endsWith('.mp4') || 
+                  filename.includes('.mp4') ||
+                  innerUrl.includes('.mp4') || 
+                  innerUrl.includes('/video/') || 
+                  innerUrl.includes('video_dashinit')) {
+                isVideo = true;
+              }
+            }
+          }
+        } catch (e) {
+          // Ignore decoding errors
+        }
 
         if (!isVideo && item.url) {
           // Check URL heuristics
@@ -112,25 +151,6 @@ class InstagramService {
               item.url.includes('video_dashinit') ||
               item.url.includes('.mp4?')) {
             isVideo = true;
-          } else {
-            // Check token payload if present
-            try {
-              const tokenMatch = item.url.match(/token=([^&]+)/);
-              if (tokenMatch) {
-                const payload = JSON.parse(Buffer.from(tokenMatch[1].split('.')[1], 'base64').toString());
-                const filename = (payload.filename || '').toLowerCase();
-                const innerUrl = (payload.url || '').toLowerCase();
-                if (filename.endsWith('.mp4') || 
-                    filename.includes('.mp4') ||
-                    innerUrl.includes('.mp4') || 
-                    innerUrl.includes('/video/') || 
-                    innerUrl.includes('video_dashinit')) {
-                  isVideo = true;
-                }
-              }
-            } catch (e) {
-              // Ignore decoding errors
-            }
           }
         }
 
@@ -139,6 +159,7 @@ class InstagramService {
 
         return {
           url: item.url,
+          directUrl: directUrl,
           type: isVideo ? 'video' : 'image'
         };
       });
@@ -159,24 +180,52 @@ class InstagramService {
       // Download each media item in order
       for (let i = 0; i < mediaDetails.length; i++) {
         const detail = mediaDetails[i];
-        const mediaUrl = detail.url;
+        let mediaUrl = detail.url;
         const mediaType = detail.type;
         
+        // For images, rapidcdn (SnapSave proxy) has aggressive Cloudflare cache collisions that serve
+        // identical cached responses for all slides. If we have the direct Instagram CDN URL in directUrl,
+        // we use images.weserv.nl as an image proxy to fetch the exact slide and bypass the RKN block on Meta CDN.
+        if (mediaType === 'image' && detail.directUrl) {
+          mediaUrl = `https://images.weserv.nl/?url=${encodeURIComponent(detail.directUrl)}`;
+        }
+
         const ext = mediaType === 'video' ? 'mp4' : 'jpg';
         const mediaPath = path.join(config.download.tempDir, `${filenamePrefix.replace(/\.$/, '')}_${i + 1}.${ext}`);
         
         try {
-          const response = await axios({
-            method: 'GET',
-            url: mediaUrl,
-            responseType: 'arraybuffer',
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-              'Referer': 'https://www.instagram.com/'
-            },
-            timeout: mediaType === 'video' ? 60000 : 30000,
-            maxContentLength: 50 * 1024 * 1024 // 50MB max
-          });
+          let response;
+          try {
+            response = await axios({
+              method: 'GET',
+              url: mediaUrl,
+              responseType: 'arraybuffer',
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://www.instagram.com/'
+              },
+              timeout: mediaType === 'video' ? 60000 : 30000,
+              maxContentLength: 50 * 1024 * 1024 // 50MB max
+            });
+          } catch (proxyErr) {
+            // Fall back to original URL if proxy fails
+            if (mediaUrl !== detail.url) {
+              logger.warn(`Proxy download failed for item ${i + 1}, falling back to original URL: ${proxyErr.message}`);
+              response = await axios({
+                method: 'GET',
+                url: detail.url,
+                responseType: 'arraybuffer',
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                  'Referer': 'https://www.instagram.com/'
+                },
+                timeout: mediaType === 'video' ? 60000 : 30000,
+                maxContentLength: 50 * 1024 * 1024
+              });
+            } else {
+              throw proxyErr;
+            }
+          }
 
           await fs.writeFile(mediaPath, response.data);
           totalBytes += response.data.byteLength || response.data.length || 0;

@@ -34,6 +34,23 @@ const bot = new Telegraf(config.botToken, {
 });
 
 bot.use(errorHandler());
+
+// Normalize channel_post updates so handlers can use ctx.message uniformly
+bot.use((ctx, next) => {
+  const post = ctx.channelPost || ctx.editedChannelPost;
+  if (post) {
+    if (!ctx.update.message) {
+      ctx.update.message = post;
+    }
+    Object.defineProperty(ctx, 'message', {
+      value: post,
+      writable: true,
+      configurable: true
+    });
+  }
+  return next();
+});
+
 bot.use(loggingMiddleware());
 
 // Blacklist check - must be before commands
@@ -74,6 +91,12 @@ bot.action('insta_single', handleInstagramCallback);
 bot.action('insta_all', handleInstagramCallback);
 
 bot.on(message('text'), handleDownload);
+bot.on('channel_post', (ctx, next) => {
+  if (ctx.channelPost && (ctx.channelPost.text || ctx.channelPost.caption)) {
+    return handleDownload(ctx, next);
+  }
+  return next();
+});
 
 bot.use(markovResponseHandler);
 

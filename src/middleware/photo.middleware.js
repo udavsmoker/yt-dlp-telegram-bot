@@ -14,7 +14,7 @@ async function photoLearningMiddleware(ctx, next) {
       return next();
     }
 
-    if (ctx.message && ctx.message.photo && ctx.message.photo.length > 0) {
+    if (ctx.message && ctx.message.photo && ctx.message.photo.length > 0 && ctx.from) {
       const userInfo = getUserInfo(ctx);
       const chatId = ctx.chat.id;
       const userId = ctx.from.id;

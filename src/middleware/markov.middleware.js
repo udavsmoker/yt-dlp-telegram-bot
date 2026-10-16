@@ -5,7 +5,7 @@ const logger = require('../utils/logger');
 
 async function markovLearningMiddleware(ctx, next) {
   try {
-    if (!ctx.message || !ctx.message.text) {
+    if (!ctx.message || !ctx.message.text || !ctx.from) {
       return next();
     }
 
@@ -35,7 +35,7 @@ async function markovLearningMiddleware(ctx, next) {
 
 async function markovResponseHandler(ctx, next) {
   try {
-    if (!ctx.message || !ctx.message.text) {
+    if (!ctx.message || !ctx.message.text || !ctx.from) {
       return next();
     }
 

@@ -29,6 +29,11 @@ function blacklistCheckMiddleware() {
         return next();
       }
 
+      // Channel posts have no ctx.from — skip blacklist check
+      if (!ctx.from) {
+        return next();
+      }
+
       const userId = ctx.from.id;
       const chatId = ctx.chat.id;
 

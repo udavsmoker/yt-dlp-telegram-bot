@@ -65,7 +65,15 @@ function generateFilename(prefix, extension) {
 
 function getUserInfo(ctx) {
   const user = ctx.from;
-  return `@${user.username || 'unknown'} (${user.id})`;
+  if (user) {
+    return `@${user.username || 'unknown'} (${user.id})`;
+  }
+  // Channel posts have no ctx.from — use chat info instead
+  const chat = ctx.chat;
+  if (chat) {
+    return `channel "${chat.title || 'unknown'}" (${chat.id})`;
+  }
+  return 'unknown source';
 }
 
 function isValidVideoUrl(url) {

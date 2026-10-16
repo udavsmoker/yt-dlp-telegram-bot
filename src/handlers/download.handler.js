@@ -16,6 +16,26 @@ const pendingYouTubeDownloads = new Map();
 const pendingInstagramDownloads = new Map();
 const pendingAudioExtracts = new Map();
 
+// Get sender name and caption prefix for download messages
+// For users: returns { name: "First Last", caption: '<a href="tg://user?id=123">First Last</a>' }
+// For channels: returns { name: "Channel Title", caption: 'Channel Title' }
+function getSenderInfo(ctx) {
+  if (ctx.chat?.type === 'channel') {
+    const title = ctx.chat?.title || 'Channel';
+    return { name: title, caption: title };
+  }
+  if (ctx.from) {
+    const name = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+    return {
+      name,
+      caption: `<a href="tg://user?id=${ctx.from.id}">${name}</a>`
+    };
+  }
+  // Fallback — use chat title
+  const title = ctx.chat?.title || 'Channel';
+  return { name: title, caption: title };
+}
+
 // Truncate title to avoid Telegram's 1024-char caption limit
 function truncateTitle(title, maxLen = 200) {
   if (!title) return null;
@@ -63,7 +83,14 @@ async function getVideoLocalPath(ctx, fileId) {
 
 async function handleDownload(ctx, next) {
   const userInfo = getUserInfo(ctx);
-  const messageText = ctx.message.text;
+  const message = ctx.message || ctx.channelPost;
+  if (!message) {
+    return next();
+  }
+  const messageText = message.text || message.caption;
+  if (!messageText) {
+    return next();
+  }
   
   const userId = ctx.from?.id;
   const chatId = ctx.chat.id;
@@ -97,9 +124,9 @@ async function handleDownload(ctx, next) {
     );
     
     pendingYouTubeDownloads.set(confirmMessage.message_id, {
-      userId: ctx.from.id,
+      userId: ctx.from?.id,
       url: url,
-      originalMessageId: ctx.message.message_id
+      originalMessageId: message.message_id
     });
     
     setTimeout(() => {
@@ -133,11 +160,11 @@ async function handleDownload(ctx, next) {
       );
       
       pendingInstagramDownloads.set(confirmMessage.message_id, {
-        userId: ctx.from.id,
+        userId: ctx.from?.id,
         url: url,
         imgIndex: imgIndex,
         chatId: ctx.chat.id,
-        originalMessageId: ctx.message.message_id,
+        originalMessageId: message.message_id,
         ctx: ctx
       });
       
@@ -232,7 +259,7 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
             '📤 Uploading to Telegram...'
           );
           
-          const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+          const sender = getSenderInfo(ctx);
           
           // Build media array with both photos and videos in order
           const allMedia = [];
@@ -288,7 +315,7 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
                 `📱 ${result.info.platform}`,
                 result.info.title ? `\n${truncateTitle(result.info.title)}` : null
               ].filter(Boolean).join('\n');
-              const caption = `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${metaLines}</blockquote>`.trim();
+              const caption = `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${metaLines}</blockquote>`.trim();
               
               if (item.type === 'photo') {
                 await ctx.replyWithPhoto(
@@ -317,7 +344,7 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
                 `📱 ${result.info.platform}`,
                 result.info.title ? `\n${truncateTitle(result.info.title)}` : null
               ].filter(Boolean).join('\n');
-              const mediaCaption = `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${mediaMetaLines}</blockquote>`.trim();
+              const mediaCaption = `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${mediaMetaLines}</blockquote>`.trim();
 
               const mediaGroup = batch.map((item, index) => ({
                 type: item.type,
@@ -385,7 +412,7 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
             '📤 Uploading to Telegram...'
           );
           
-          const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+          const sender = getSenderInfo(ctx);
           
           const bskyMetaLines = [
             result.info.title && result.info.title !== 'Bluesky Video' ? `${truncateTitle(result.info.title)}\n` : null,
@@ -397,7 +424,7 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
           ].filter(Boolean).join('\n');
           
           const videoOptions = {
-            caption: `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${bskyMetaLines}</blockquote>`.trim(),
+            caption: `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${bskyMetaLines}</blockquote>`.trim(),
             parse_mode: 'HTML',
             supports_streaming: true,
             width: result.width,
@@ -439,10 +466,10 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
             '📤 Uploading photos to Telegram...'
           );
           
-          const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+          const sender = getSenderInfo(ctx);
           
           const titleText = truncateTitle(result.info.title, 800);
-          const slideshowCaption = `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${titleText && titleText !== 'Bluesky Post' ? titleText + '\n' : ''}👤 ${result.info.author}\n💾 ${result.info.fileSize}\n📱 ${result.info.platform}</blockquote>`.trim();
+          const slideshowCaption = `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${titleText && titleText !== 'Bluesky Post' ? titleText + '\n' : ''}👤 ${result.info.author}\n💾 ${result.info.fileSize}\n📱 ${result.info.platform}</blockquote>`.trim();
           
           // Telegram allows max 10 media per group
           const TELEGRAM_MEDIA_LIMIT = 10;
@@ -524,12 +551,12 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
             '📤 Uploading to Telegram...'
           );
           
-          const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+          const sender = getSenderInfo(ctx);
           
           const qualityLine = result.info.quality ? `📊 Quality: ${result.info.quality}\n` : '';
           
           const videoOptions = {
-            caption: `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${result.info.author}\n⏱ ${result.info.duration}\n💾 ${result.info.fileSize}\n📱 ${result.info.platform}\n${qualityLine}</blockquote>`.trim(),
+            caption: `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${result.info.author}\n⏱ ${result.info.duration}\n💾 ${result.info.fileSize}\n📱 ${result.info.platform}\n${qualityLine}</blockquote>`.trim(),
             parse_mode: 'HTML',
             supports_streaming: true,
             width: result.width,
@@ -592,10 +619,10 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
             '📤 Uploading to Telegram...'
           );
           
-          const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+          const sender = getSenderInfo(ctx);
           
           const videoOptions = {
-            caption: `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>
+            caption: `${sender.caption} shared: <a href="${url}">Link</a>
 
 <blockquote expandable>👤 ${result.info.author}
 ⏱ ${result.info.duration}
@@ -643,7 +670,7 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
             '📤 Uploading photos to Telegram...'
           );
           
-          const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+          const sender = getSenderInfo(ctx);
           
           // Telegram allows max 10 media per group, split into batches
           const TELEGRAM_MEDIA_LIMIT = 10;
@@ -658,7 +685,7 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
           
           // Build caption for the last batch
           const titleText = truncateTitle(result.info.title, 800);
-          const slideshowCaption = `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>
+          const slideshowCaption = `${sender.caption} shared: <a href="${url}">Link</a>
 
 <blockquote expandable>${titleText ? titleText + '\n' : ''}👤 ${result.info.author}
 📱 ${result.info.platform}</blockquote>`.trim();
@@ -740,12 +767,12 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
             '📤 Uploading to Telegram...'
           );
           
-          const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+          const sender = getSenderInfo(ctx);
           
           const qualityLine = result.info.quality ? `📊 Quality: ${result.info.quality}\n` : '';
           
           const videoOptions = {
-            caption: `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>
+            caption: `${sender.caption} shared: <a href="${url}">Link</a>
 
 <blockquote expandable>👤 ${result.info.author}
 ⏱ ${result.info.duration}
@@ -796,7 +823,7 @@ ${qualityLine}</blockquote>`.trim(),
     const result = await videoService.download(url);
     
     if (result.type === 'slideshow' || result.type === 'image') {
-      const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+      const sender = getSenderInfo(ctx);
       if (result.imagePaths) filesToCleanup.push(...result.imagePaths);
       
       logger.info(`Slideshow/Images downloaded: ${(result.imagePaths || []).length} images`);
@@ -823,7 +850,7 @@ ${qualityLine}</blockquote>`.trim(),
           const mediaGroup = batch.map((imagePath, index) => ({
             type: 'photo',
             media: getFileForTelegram(imagePath),
-            caption: isLastBatch && index === 0 ? `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${result.info?.author || 'Unknown'}\n📱 ${result.info?.platform || 'Unknown'}</blockquote>`.trim() : undefined,
+            caption: isLastBatch && index === 0 ? `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${result.info?.author || 'Unknown'}\n📱 ${result.info?.platform || 'Unknown'}</blockquote>`.trim() : undefined,
             parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined
           }));
           
@@ -854,13 +881,13 @@ ${qualityLine}</blockquote>`.trim(),
       '📤 Uploading to Telegram...'
     );
     
-    const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+    const sender = getSenderInfo(ctx);
     
     const qualityLine = result.info.quality ? `📊 Quality: ${result.info.quality}\n` : '';
     const fileSizeLine = result.info.fileSize ? `💾 Size: ${result.info.fileSize}\n` : '';
     
     const videoOptions = {
-      caption: `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>
+      caption: `${sender.caption} shared: <a href="${url}">Link</a>
 
 <blockquote expandable>👤 ${result.info.author}
 ⏱ ${result.info.duration}
@@ -922,7 +949,7 @@ ${qualityLine}</blockquote>`.trim(),
 async function handleYouTubeCallback(ctx) {
   const callbackData = ctx.callbackQuery.data;
   const messageId = ctx.callbackQuery.message.message_id;
-  const userId = ctx.from.id;
+  const userId = ctx.from?.id;
   
   // Check if this is a pending YouTube download
   const pendingDownload = pendingYouTubeDownloads.get(messageId);
@@ -933,8 +960,8 @@ async function handleYouTubeCallback(ctx) {
     return;
   }
   
-  // Verify only the original sender can press the buttons
-  if (pendingDownload.userId !== userId) {
+  // Verify only the original sender can press the buttons (if recorded, skip check for channels)
+  if (pendingDownload.userId && pendingDownload.userId !== userId) {
     await ctx.answerCbQuery('⚠️ Only the person who shared the link can use these buttons.', { show_alert: true });
     return;
   }
@@ -984,7 +1011,7 @@ async function handleYouTubeCallback(ctx) {
 async function handleInstagramCallback(ctx) {
   const callbackData = ctx.callbackQuery.data;
   const messageId = ctx.callbackQuery.message.message_id;
-  const userId = ctx.from.id;
+  const userId = ctx.from?.id;
   
   const pendingDownload = pendingInstagramDownloads.get(messageId);
   
@@ -994,7 +1021,7 @@ async function handleInstagramCallback(ctx) {
     return;
   }
   
-  if (pendingDownload.userId !== userId) {
+  if (pendingDownload.userId && pendingDownload.userId !== userId) {
     await ctx.answerCbQuery('⚠️ Only the person who shared the link can use these buttons.', { show_alert: true });
     return;
   }
@@ -1065,11 +1092,11 @@ async function processInstagramDownload(ctx, url, statusMessage, userInfo, imgIn
         '📤 Uploading to Telegram...'
       );
       
-      const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+      const sender = getSenderInfo(ctx);
       const qualityLine = videoResult.info.quality ? `📊 Quality: ${videoResult.info.quality}\n` : '';
       
       const videoOptions = {
-        caption: `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${videoResult.info.author}\n⏱ ${videoResult.info.duration}\n💾 ${videoResult.info.fileSize}\n📱 ${videoResult.info.platform}\n${qualityLine}</blockquote>`.trim(),
+        caption: `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${videoResult.info.author}\n⏱ ${videoResult.info.duration}\n💾 ${videoResult.info.fileSize}\n📱 ${videoResult.info.platform}\n${qualityLine}</blockquote>`.trim(),
         parse_mode: 'HTML',
         supports_streaming: true,
         width: videoResult.width,
@@ -1099,7 +1126,7 @@ async function processInstagramDownload(ctx, url, statusMessage, userInfo, imgIn
       '📤 Uploading to Telegram...'
     );
     
-    const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+    const sender = getSenderInfo(ctx);
     
     const allMedia = [];
     if (result.imagePaths) {
@@ -1139,7 +1166,7 @@ async function processInstagramDownload(ctx, url, statusMessage, userInfo, imgIn
           `📱 ${result.info.platform}`,
           result.info.title ? `\n${truncateTitle(result.info.title)}` : null
         ].filter(Boolean).join('\n');
-        const caption = `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${metaLines}</blockquote>`.trim();
+        const caption = `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${metaLines}</blockquote>`.trim();
         
         if (item.type === 'photo') {
           await ctx.replyWithPhoto(getFileForTelegram(item.path), { caption, parse_mode: 'HTML' });
@@ -1162,7 +1189,7 @@ async function processInstagramDownload(ctx, url, statusMessage, userInfo, imgIn
           `📱 ${result.info.platform}`,
           result.info.title ? `\n${truncateTitle(result.info.title)}` : null
         ].filter(Boolean).join('\n');
-        const mediaCaption = `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${mediaMetaLines}</blockquote>`.trim();
+        const mediaCaption = `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${mediaMetaLines}</blockquote>`.trim();
         
         const mediaGroup = batch.map((item, index) => ({
           type: item.type,
@@ -1230,7 +1257,7 @@ async function processYouTubeDownload(ctx, url, userInfo, originalMessageId) {
       '📤 Uploading to Telegram...'
     );
     
-    const senderName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+    const sender = getSenderInfo(ctx);
     
     const qualityLine = result.info.quality ? `📊 Quality: ${result.info.quality}` : '';
     
@@ -1244,7 +1271,7 @@ async function processYouTubeDownload(ctx, url, userInfo, originalMessageId) {
     ].filter(Boolean).join('\n');
     
     const videoOptions = {
-      caption: `<a href="tg://user?id=${ctx.from.id}">${senderName}</a> shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${ytMetaLines}</blockquote>`.trim(),
+      caption: `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${ytMetaLines}</blockquote>`.trim(),
       parse_mode: 'HTML',
       supports_streaming: true,
       width: result.width,
@@ -1270,7 +1297,7 @@ async function processYouTubeDownload(ctx, url, userInfo, originalMessageId) {
       pendingAudioExtracts.set(sentVideo.message_id, {
         videoFileId: sentVideo.video.file_id,
         thumbnailFileId: sentVideo.video.thumbnail?.file_id || sentVideo.video.thumb?.file_id,
-        userId: ctx.from.id,
+        userId: ctx.from?.id,
         title: result.info.title,
         author: result.info.author
       });
@@ -1418,7 +1445,7 @@ async function handleMp3Command(ctx) {
 // Handle YouTube audio button callback
 async function handleAudioCallback(ctx) {
   const messageId = ctx.callbackQuery.message.message_id;
-  const userId = ctx.from.id;
+  const userId = ctx.from?.id;
   
   const pending = pendingAudioExtracts.get(messageId);
   

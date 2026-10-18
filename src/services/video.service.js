@@ -216,6 +216,16 @@ class VideoService {
             if (stderr) {
               logger.debug(`yt-dlp stderr: ${stderr.substring(0, 500)}`);
             }
+
+            // Don't retry different video quality formats if the post simply contains no video or is private
+            if (stderr.includes('There is no video in this post') ||
+                stderr.includes('This post is private') ||
+                stderr.includes('Video unavailable') ||
+                stderr.includes('Sign in to confirm your age')) {
+              logger.info(`Non-retryable yt-dlp error encountered, aborting quality fallbacks`);
+              break;
+            }
+
             continue;
           }
 

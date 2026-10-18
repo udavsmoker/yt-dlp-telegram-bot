@@ -222,6 +222,7 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
   try {
     let isTikTok = isTikTokUrl(url);
     let isInstagramPost = isInstagramPostUrl(url);
+    const originalIsInstagramPost = isInstagramPost;
     let isBluesky = isBlueskyPostUrl(url);
     let triedVideo = false;
     
@@ -239,9 +240,9 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
         
         const result = await videoService.downloadInstagramPost(url);
         
-        // If it's actually a video (only videos, no photos), fall back to yt-dlp video download
+        // If it's actually a video (or direct download couldn't find items), fall back to yt-dlp video download
         if (result.type === 'video' && result.shouldFallback) {
-          logger.info('Instagram post contains only video(s), falling back to video download');
+          logger.info('Instagram service could not download media directly, falling back to video download');
           isInstagramPost = false;
           // Continue to normal video download below
         } else if (result.type === 'mixed' || result.type === 'photos') {
@@ -923,13 +924,20 @@ ${qualityLine}</blockquote>`.trim(),
   } catch (error) {
     logger.error(`Download failed for ${userInfo}: ${error.message}`);
     
-    const safeErrorMsg = error.message ? error.message.replace(/[_*[\]`]/g, ' ') : 'Unknown error';
+    let safeErrorMsg = error.message ? error.message.replace(/[_*[\]`]/g, ' ') : 'Unknown error';
+    if (safeErrorMsg.startsWith('YTDLP_ERROR:')) {
+      safeErrorMsg = safeErrorMsg.replace('YTDLP_ERROR:', '');
+    }
+
+    if (originalIsInstagramPost && safeErrorMsg.includes('There is no video in this post')) {
+      safeErrorMsg = 'Failed to download Instagram photo post. The photo service was temporarily unavailable, please try again in a few moments.';
+    }
     
     await ctx.telegram.editMessageText(
       ctx.chat.id,
       statusMessage.message_id,
       null,
-      `❌ ${safeErrorMsg}\n\n*Troubleshooting:*\n• Ensure link is valid\n• Video must be public\n• Max size: ${ctx.telegram.options?.apiRoot?.includes('localhost') ? '2000' : '50'}MB\n• Platform must be supported`,
+      `❌ ${safeErrorMsg}\n\n*Troubleshooting:*\n• Ensure link is valid\n• ${originalIsInstagramPost ? 'Post' : 'Video'} must be public\n• Max size: ${ctx.telegram.options?.apiRoot?.includes('localhost') ? '2000' : '50'}MB\n• Platform must be supported`,
       { parse_mode: 'Markdown' }
     );
   } finally {

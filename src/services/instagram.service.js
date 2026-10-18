@@ -40,29 +40,51 @@ class InstagramService {
 
       await ensureDir(config.download.tempDir);
 
-      // Clean img_index from URL before querying API
+      // Clean URL: strip tracking query parameters (exln, cplk, igsh, utm_*, etc.)
       let cleanUrlStr = url;
       try {
         const cleanUrl = new URL(url);
-        cleanUrl.searchParams.delete('img_index');
+        cleanUrl.search = '';
+        cleanUrl.hash = '';
+        let pathname = cleanUrl.pathname;
+        if (!pathname.endsWith('/')) pathname += '/';
+        cleanUrl.pathname = pathname;
         cleanUrlStr = cleanUrl.toString();
       } catch {}
 
-      // Get direct URLs from Instagram
-      const btchResult = await igdl(cleanUrlStr);
-      
-      if (!btchResult || !btchResult.status || !Array.isArray(btchResult.result)) {
-        logger.warn(`btch-downloader failed for ${cleanUrlStr}: ${btchResult?.message || 'Invalid API response'}`);
-        // Return shouldFallback to try yt-dlp
-        return { type: 'video', shouldFallback: true };
-      }
+      // Get direct URLs from Instagram with retries
+      let validItems = [];
+      const maxRetries = 3;
 
-      // Filter out invalid items (like empty objects from 401 error)
-      const validItems = btchResult.result.filter(item => item && item.url);
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          // On last attempt, try original url if cleanUrlStr is different
+          const targetUrl = (attempt === maxRetries && cleanUrlStr !== url) ? url : cleanUrlStr;
+          if (attempt > 1) {
+            logger.info(`Retrying btch-downloader (attempt ${attempt}/${maxRetries}): ${targetUrl}`);
+          }
+          const btchResult = await igdl(targetUrl);
+          
+          if (btchResult && btchResult.status && Array.isArray(btchResult.result)) {
+            validItems = btchResult.result.filter(item => item && item.url);
+            if (validItems.length > 0) {
+              break;
+            }
+          }
+          logger.warn(`btch-downloader attempt ${attempt} returned no valid media URLs for ${targetUrl}`);
+        } catch (err) {
+          logger.warn(`btch-downloader attempt ${attempt} failed: ${err.message}`);
+        }
+
+        if (attempt < maxRetries) {
+          await new Promise(res => setTimeout(res, 1200 * attempt));
+        }
+      }
       
       if (validItems.length === 0) {
-        logger.warn(`btch-downloader returned no valid media URLs for ${cleanUrlStr}`);
-        return { type: 'video', shouldFallback: true };
+        logger.warn(`btch-downloader returned no valid media URLs for ${cleanUrlStr} after ${maxRetries} attempts`);
+        const isReel = url.includes('/reel/') || url.includes('/reels/');
+        return { type: 'video', shouldFallback: true, isPhotoPostCandidate: !isReel };
       }
 
       logger.info(`btch-downloader found ${validItems.length} media item(s) (before dedup)`);

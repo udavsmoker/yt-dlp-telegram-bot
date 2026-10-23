@@ -330,11 +330,11 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
   let filePath = null;
   let thumbnailPath = null;
   let filesToCleanup = [];
+  let isInstagramPost = isInstagramPostUrl(url);
+  const originalIsInstagramPost = isInstagramPost;
   
   try {
     let isTikTok = isTikTokUrl(url);
-    let isInstagramPost = isInstagramPostUrl(url);
-    const originalIsInstagramPost = isInstagramPost;
     let isBluesky = isBlueskyPostUrl(url);
     let triedVideo = false;
     
@@ -802,22 +802,39 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
   } catch (error) {
     logger.error(`Download failed for ${userInfo}: ${error.message}`);
     
-    let safeErrorMsg = error.message ? error.message.replace(/[_*[\]`]/g, ' ') : 'Unknown error';
+    let safeErrorMsg = error.message ? error.message.replace(/[_*[\]`~>#+\-=|{}.!()\\]/g, ' ').trim() : 'Unknown error';
     if (safeErrorMsg.startsWith('YTDLP_ERROR:')) {
-      safeErrorMsg = safeErrorMsg.replace('YTDLP_ERROR:', '');
+      safeErrorMsg = safeErrorMsg.replace('YTDLP_ERROR:', '').trim();
     }
 
     if (originalIsInstagramPost && safeErrorMsg.includes('There is no video in this post')) {
       safeErrorMsg = 'Failed to download Instagram photo post. The photo service was temporarily unavailable, please try again in a few moments.';
     }
     
-    await ctx.telegram.editMessageText(
-      ctx.chat.id,
-      statusMessage.message_id,
-      null,
-      `❌ ${safeErrorMsg}\n\n*Troubleshooting:*\n• Ensure link is valid\n• ${originalIsInstagramPost ? 'Post' : 'Video'} must be public\n• Max size: ${ctx.telegram.options?.apiRoot?.includes('localhost') ? '2000' : '50'}MB\n• Platform must be supported`,
-      { parse_mode: 'Markdown' }
-    );
+    const errorText = `❌ ${safeErrorMsg}\n\n*Troubleshooting:*\n• Ensure link is valid\n• ${originalIsInstagramPost ? 'Post' : 'Video'} must be public\n• Max size: ${ctx.telegram.options?.apiRoot?.includes('localhost') ? '2000' : '50'}MB\n• Platform must be supported`;
+    
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMessage.message_id,
+        null,
+        errorText,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (editError) {
+      // If Markdown parsing fails, retry without parse_mode
+      try {
+        const plainText = errorText.replace(/[*_`]/g, '');
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          statusMessage.message_id,
+          null,
+          plainText
+        );
+      } catch (finalError) {
+        logger.error(`Failed to send error message to ${userInfo}: ${finalError.message}`);
+      }
+    }
   } finally {
     if (filePath) {
       await cleanupFile(filePath);

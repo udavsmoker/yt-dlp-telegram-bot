@@ -42,32 +42,7 @@ function errorHandler() {
   };
 }
 
-function rateLimiter(maxRequests = 5, windowMs = 60000) {
-  const users = new Map();
-  
-  return async (ctx, next) => {
-    const userId = ctx.from?.id;
-    if (!userId) return next();
-    
-    const now = Date.now();
-    const userRequests = users.get(userId) || [];
-    
-    const recentRequests = userRequests.filter(time => now - time < windowMs);
-    
-    if (recentRequests.length >= maxRequests) {
-      await ctx.reply('⏱ Please wait a moment before making another request.');
-      return;
-    }
-    
-    recentRequests.push(now);
-    users.set(userId, recentRequests);
-    
-    await next();
-  };
-}
-
 module.exports = {
   loggingMiddleware,
-  errorHandler,
-  rateLimiter
+  errorHandler
 };

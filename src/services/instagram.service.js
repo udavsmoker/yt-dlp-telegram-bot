@@ -2,7 +2,7 @@ const { igdl } = require('btch-downloader');
 const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
-const { generateFilename, ensureDir, generateThumbnailFromVideo } = require('../utils/helpers');
+const { generateFilename, ensureDir, generateThumbnailFromVideo, formatFileSize, formatDuration } = require('../utils/helpers');
 const config = require('../config');
 const logger = require('../utils/logger');
 
@@ -283,11 +283,14 @@ class InstagramService {
       const firstVideo = downloadedMedia.find(m => m.type === 'video');
       if (firstVideo) {
         try {
-          const { execSync } = require('child_process');
-          const ffprobeRes = execSync(
-            `ffprobe -v error -select_streams v:0 -show_entries stream=width,height,duration:format=duration -of json "${firstVideo.path}"`,
-            { encoding: 'utf8', timeout: 5000 }
-          );
+          const { execFileSync } = require('child_process');
+          const ffprobeRes = execFileSync('ffprobe', [
+            '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height,duration:format=duration',
+            '-of', 'json',
+            firstVideo.path
+          ], { encoding: 'utf8', timeout: 5000 });
           const parsed = JSON.parse(ffprobeRes);
           if (parsed.streams && parsed.streams[0]) {
             videoWidth = parsed.streams[0].width || undefined;
@@ -298,7 +301,7 @@ class InstagramService {
             videoDurationSecs = parseFloat(parsed.format.duration) || undefined;
           }
           if (videoDurationSecs) {
-            durationStr = this.formatDuration(videoDurationSecs);
+            durationStr = formatDuration(videoDurationSecs);
           }
         } catch (e) {
           logger.warn(`Could not extract video metadata with ffprobe: ${e.message}`);
@@ -321,7 +324,7 @@ class InstagramService {
           author: meta.author,
           platform: 'Instagram',
           duration: durationStr,
-          fileSize: this.formatFileSize(totalBytes),
+          fileSize: formatFileSize(totalBytes),
           imageCount: finalImageCount,
           videoCount: finalVideoCount
         }
@@ -338,24 +341,7 @@ class InstagramService {
     }
   }
 
-  formatFileSize(bytes) {
-    if (!bytes || bytes === 0) return 'Unknown';
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    if (i === 0) return `${bytes} ${sizes[i]}`;
-    return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
-  }
 
-  formatDuration(seconds) {
-    if (!seconds) return null;
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    }
-    return `${minutes}:${secs.toString().padStart(2, '0')}`;
-  }
 }
 
 module.exports = new InstagramService();

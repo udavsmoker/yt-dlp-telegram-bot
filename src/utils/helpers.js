@@ -242,7 +242,7 @@ const config = require('../config');
  */
 async function prepareThumbnail(inputPath, outputPath = null) {
   try {
-    const { execSync } = require('child_process');
+    const { execFileSync } = require('child_process');
     
     if (!outputPath) {
       outputPath = path.join(
@@ -253,10 +253,13 @@ async function prepareThumbnail(inputPath, outputPath = null) {
     
     // Scale to max 320px on longest side, convert to JPEG
     // Use q:v 5 initially (good quality, small size)
-    execSync(
-      `ffmpeg -y -i "${inputPath}" -vf "scale='if(gt(iw,ih),min(320,iw),-2)':'if(gt(iw,ih),-2,min(320,ih))'" -frames:v 1 -q:v 5 "${outputPath}"`,
-      { stdio: 'ignore', timeout: 10000 }
-    );
+    execFileSync('ffmpeg', [
+      '-y', '-i', inputPath,
+      '-vf', "scale='if(gt(iw,ih),min(320,iw),-2)':'if(gt(iw,ih),-2,min(320,ih))'",
+      '-frames:v', '1',
+      '-q:v', '5',
+      outputPath
+    ], { stdio: 'ignore', timeout: 10000 });
     
     // Check file size - must be under 200KB
     const stats = await fs.stat(outputPath);
@@ -264,10 +267,11 @@ async function prepareThumbnail(inputPath, outputPath = null) {
     if (stats.size > 200 * 1024) {
       // Re-encode with lower quality to fit under 200KB
       const tempPath = outputPath + '.tmp.jpg';
-      execSync(
-        `ffmpeg -y -i "${outputPath}" -q:v 10 "${tempPath}"`,
-        { stdio: 'ignore', timeout: 10000 }
-      );
+      execFileSync('ffmpeg', [
+        '-y', '-i', outputPath,
+        '-q:v', '10',
+        tempPath
+      ], { stdio: 'ignore', timeout: 10000 });
       await fs.unlink(outputPath);
       await fs.rename(tempPath, outputPath);
       
@@ -275,10 +279,12 @@ async function prepareThumbnail(inputPath, outputPath = null) {
       if (newStats.size > 200 * 1024) {
         // Still too large - try even lower quality with forced smaller size
         const tempPath2 = outputPath + '.tmp2.jpg';
-        execSync(
-          `ffmpeg -y -i "${outputPath}" -vf "scale='if(gt(iw,ih),min(200,iw),-2)':'if(gt(iw,ih),-2,min(200,ih))'" -q:v 12 "${tempPath2}"`,
-          { stdio: 'ignore', timeout: 10000 }
-        );
+        execFileSync('ffmpeg', [
+          '-y', '-i', outputPath,
+          '-vf', "scale='if(gt(iw,ih),min(200,iw),-2)':'if(gt(iw,ih),-2,min(200,ih))'",
+          '-q:v', '12',
+          tempPath2
+        ], { stdio: 'ignore', timeout: 10000 });
         await fs.unlink(outputPath);
         await fs.rename(tempPath2, outputPath);
       }
@@ -308,7 +314,7 @@ async function prepareThumbnail(inputPath, outputPath = null) {
  */
 async function generateThumbnailFromVideo(videoPath, outputPath = null) {
   try {
-    const { execSync } = require('child_process');
+    const { execFileSync } = require('child_process');
     
     if (!outputPath) {
       outputPath = path.join(
@@ -318,10 +324,13 @@ async function generateThumbnailFromVideo(videoPath, outputPath = null) {
     }
     
     // Use thumbnail filter to pick the best frame, then scale to max 320px
-    execSync(
-      `ffmpeg -y -i "${videoPath}" -vf "thumbnail,scale='if(gt(iw,ih),min(320,iw),-2)':'if(gt(iw,ih),-2,min(320,ih))'" -frames:v 1 -q:v 5 "${outputPath}"`,
-      { stdio: 'ignore', timeout: 15000 }
-    );
+    execFileSync('ffmpeg', [
+      '-y', '-i', videoPath,
+      '-vf', "thumbnail,scale='if(gt(iw,ih),min(320,iw),-2)':'if(gt(iw,ih),-2,min(320,ih))'",
+      '-frames:v', '1',
+      '-q:v', '5',
+      outputPath
+    ], { stdio: 'ignore', timeout: 15000 });
     
     // Verify it was created
     await fs.access(outputPath);
@@ -330,10 +339,11 @@ async function generateThumbnailFromVideo(videoPath, outputPath = null) {
     const stats = await fs.stat(outputPath);
     if (stats.size > 200 * 1024) {
       const tempPath = outputPath + '.tmp.jpg';
-      execSync(
-        `ffmpeg -y -i "${outputPath}" -q:v 10 "${tempPath}"`,
-        { stdio: 'ignore', timeout: 10000 }
-      );
+      execFileSync('ffmpeg', [
+        '-y', '-i', outputPath,
+        '-q:v', '10',
+        tempPath
+      ], { stdio: 'ignore', timeout: 10000 });
       await fs.unlink(outputPath);
       await fs.rename(tempPath, outputPath);
     }
@@ -358,6 +368,67 @@ function getFileForTelegram(filePath) {
   return Input.fromLocalFile(filePath);
 }
 
+function formatFileSize(bytes) {
+  if (!bytes || bytes === 0) return 'Unknown';
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  if (i === 0) return `${bytes} ${sizes[i]}`;
+  return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
+}
+
+function formatDuration(seconds) {
+  if (!seconds) return 'Unknown';
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${minutes}:${secs.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Periodically clean up files older than maxAgeMs from the given directory.
+ * Only deletes files (not directories). Runs on an interval.
+ * @param {string} dirPath - Directory to clean
+ * @param {number} maxAgeMs - Max file age in milliseconds (default: 30 minutes)
+ * @param {number} intervalMs - Cleanup interval in milliseconds (default: 10 minutes)
+ */
+function startTempCleanup(dirPath, maxAgeMs = 30 * 60 * 1000, intervalMs = 10 * 60 * 1000) {
+  const logger = require('./logger');
+
+  const cleanup = async () => {
+    try {
+      const files = await fs.readdir(dirPath);
+      const now = Date.now();
+      let cleaned = 0;
+
+      for (const file of files) {
+        try {
+          const filePath = path.join(dirPath, file);
+          const stat = await fs.stat(filePath);
+          if (stat.isFile() && (now - stat.mtimeMs) > maxAgeMs) {
+            await fs.unlink(filePath);
+            cleaned++;
+          }
+        } catch {
+          // File may have been deleted by another process, ignore
+        }
+      }
+
+      if (cleaned > 0) {
+        logger.info(`Temp cleanup: removed ${cleaned} stale file(s) from ${dirPath}`);
+      }
+    } catch (error) {
+      logger.warn(`Temp cleanup error: ${error.message}`);
+    }
+  };
+
+  // Run once on start, then on interval
+  cleanup();
+  setInterval(cleanup, intervalMs);
+}
+
 module.exports = {
   extractUrl,
   ensureDir,
@@ -375,5 +446,8 @@ module.exports = {
   isInstagramPostUrl,
   getInstagramImgIndex,
   isBlueskyUrl,
-  isBlueskyPostUrl
+  isBlueskyPostUrl,
+  formatFileSize,
+  formatDuration,
+  startTempCleanup
 };

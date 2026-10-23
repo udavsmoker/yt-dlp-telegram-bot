@@ -3,6 +3,7 @@ const settingsService = require('../services/settings.service');
 const markovDb = require('../services/markov-database.service');
 const logger = require('../utils/logger');
 const { getUserInfo, cleanupFile, getFileForTelegram } = require('../utils/helpers');
+const config = require('../config');
 
 async function handleMeme(ctx) {
   const userInfo = getUserInfo(ctx);
@@ -35,9 +36,7 @@ async function handleMeme(ctx) {
     }
 
     if (command === 'reload') {
-      const CREATOR_ID = 440493817;
-      
-      if (ctx.from.id !== CREATOR_ID) {
+      if (ctx.from.id !== config.adminUserId) {
         return ctx.reply('❌ Only the bot creator can reload templates.');
       }
 

@@ -1,8 +1,7 @@
 const blacklistService = require('../services/blacklist.service');
 const { getUserInfo } = require('../utils/helpers');
 const logger = require('../utils/logger');
-
-const ADMIN_ID = 440493817;
+const config = require('../config');
 
 // Helper to safely get user info
 function safeGetUserInfo(user) {
@@ -16,7 +15,7 @@ function safeGetUserInfo(user) {
 
 // Helper to check if user is admin
 function isAdmin(userId) {
-  return userId === ADMIN_ID;
+  return userId === config.adminUserId;
 }
 
 // /blacklist add <userId>
@@ -42,7 +41,7 @@ async function addToBlacklist(ctx) {
       return;
     }
 
-    if (targetUserId === ADMIN_ID) {
+    if (targetUserId === config.adminUserId) {
       await ctx.reply('😏 Nice try, but you can\'t blacklist yourself.');
       return;
     }
@@ -176,6 +175,5 @@ async function handleBlacklist(ctx) {
 
 module.exports = {
   handleBlacklist,
-  isAdmin,
-  ADMIN_ID
+  isAdmin
 };

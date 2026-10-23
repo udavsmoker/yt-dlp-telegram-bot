@@ -2,7 +2,7 @@ const youtubedlExec = require('youtube-dl-exec');
 const path = require('path');
 const fs = require('fs').promises;
 const axios = require('axios');
-const { generateFilename, ensureDir, prepareThumbnail, generateThumbnailFromVideo } = require('../utils/helpers');
+const { generateFilename, ensureDir, prepareThumbnail, generateThumbnailFromVideo, formatFileSize, formatDuration } = require('../utils/helpers');
 const config = require('../config');
 const logger = require('../utils/logger');
 const tiktokService = require('./tiktok.service');
@@ -259,12 +259,15 @@ class VideoService {
           
           // Re-encode if VP9/HEVC slipped through
           try {
-            const { execSync } = require('child_process');
+            const { execFileSync } = require('child_process');
             
-            const codecName = execSync(
-              `ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 "${downloadedFilePath}"`,
-              { encoding: 'utf8', timeout: 5000 }
-            ).trim().toLowerCase();
+            const codecName = execFileSync('ffprobe', [
+              '-v', 'error',
+              '-select_streams', 'v:0',
+              '-show_entries', 'stream=codec_name',
+              '-of', 'default=noprint_wrappers=1:nokey=1',
+              downloadedFilePath
+            ], { encoding: 'utf8', timeout: 5000 }).trim().toLowerCase();
             
             logger.info(`Video codec: ${codecName}`);
             
@@ -278,10 +281,19 @@ class VideoService {
               
               const reencoded = downloadedFilePath.replace(/\.(mp4|mkv|webm)$/, '_h264.mp4');
               
-              execSync(
-                `ffmpeg -i "${downloadedFilePath}" -c:v libx264 -profile:v baseline -level 4.1 -preset veryfast -crf 23 -c:a aac -profile:a aac_low -b:a 128k -movflags +faststart "${reencoded}"`,
-                { stdio: 'ignore', timeout: 120000 }
-              );
+              execFileSync('ffmpeg', [
+                '-i', downloadedFilePath,
+                '-c:v', 'libx264',
+                '-profile:v', 'baseline',
+                '-level', '4.1',
+                '-preset', 'veryfast',
+                '-crf', '23',
+                '-c:a', 'aac',
+                '-profile:a', 'aac_low',
+                '-b:a', '128k',
+                '-movflags', '+faststart',
+                reencoded
+              ], { stdio: 'ignore', timeout: 120000 });
               
               await fs.unlink(downloadedFilePath);
               await fs.rename(reencoded, downloadedFilePath);
@@ -380,11 +392,15 @@ class VideoService {
       }
 
       try {
-        const { execSync } = require('child_process');
-        const metadata = execSync(
-          `ffprobe -v error -select_streams v:0 -show_entries stream=width,height,duration:format=duration -show_entries format_tags=title,artist,author,uploader,creator -of json "${downloadedFilePath}"`,
-          { encoding: 'utf8', timeout: 5000 }
-        );
+        const { execFileSync } = require('child_process');
+        const metadata = execFileSync('ffprobe', [
+          '-v', 'error',
+          '-select_streams', 'v:0',
+          '-show_entries', 'stream=width,height,duration:format=duration',
+          '-show_entries', 'format_tags=title,artist,author,uploader,creator',
+          '-of', 'json',
+          downloadedFilePath
+        ], { encoding: 'utf8', timeout: 5000 });
         const parsed = JSON.parse(metadata);
         
         if (parsed.streams && parsed.streams[0]) {
@@ -438,8 +454,8 @@ class VideoService {
         info: {
           title: title,
           author: author,
-          duration: duration ? this.formatDuration(duration) : 'Unknown',
-          fileSize: this.formatFileSize(fileSize),
+          duration: duration ? formatDuration(duration) : 'Unknown',
+          fileSize: formatFileSize(fileSize),
           platform: this.extractPlatform(url),
           quality: usedQuality
         }
@@ -496,28 +512,7 @@ class VideoService {
     }
   }
 
-  formatFileSize(bytes) {
-    if (!bytes || bytes === 0) return 'Unknown';
-    
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    
-    if (i === 0) return `${bytes} ${sizes[i]}`;
-    return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
-  }
 
-  formatDuration(seconds) {
-    if (!seconds) return 'Unknown';
-    
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    }
-    return `${minutes}:${secs.toString().padStart(2, '0')}`;
-  }
 
   async downloadTikTokSlideshow(url) {
     return await tiktokService.downloadTikTokSlideshow(url);

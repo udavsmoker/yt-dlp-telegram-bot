@@ -1,4 +1,5 @@
 const winston = require('winston');
+require('winston-daily-rotate-file');
 const config = require('../config');
 
 const logger = winston.createLogger({
@@ -11,8 +12,19 @@ const logger = winston.createLogger({
   ),
   defaultMeta: { service: 'telegram-bot' },
   transports: [
-    new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'logs/combined.log' })
+    new winston.transports.DailyRotateFile({
+      filename: 'logs/error-%DATE%.log',
+      datePattern: 'YYYY-MM-DD',
+      level: 'error',
+      maxFiles: '7d',
+      maxSize: '20m'
+    }),
+    new winston.transports.DailyRotateFile({
+      filename: 'logs/combined-%DATE%.log',
+      datePattern: 'YYYY-MM-DD',
+      maxFiles: '7d',
+      maxSize: '50m'
+    })
   ]
 });
 

@@ -1,7 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const axios = require('axios');
-const { generateFilename, ensureDir, generateThumbnailFromVideo } = require('../utils/helpers');
+const { generateFilename, ensureDir, generateThumbnailFromVideo, formatFileSize } = require('../utils/helpers');
 const config = require('../config');
 const logger = require('../utils/logger');
 
@@ -232,11 +232,14 @@ class BlueskyService {
     }
 
     try {
-      const { execSync } = require('child_process');
-      const probeOutput = execSync(
-        `ffprobe -v error -select_streams v:0 -show_entries stream=width,height,duration:format=duration -of json "${videoPath}"`,
-        { encoding: 'utf8', timeout: 10000 }
-      );
+      const { execFileSync } = require('child_process');
+      const probeOutput = execFileSync('ffprobe', [
+        '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=width,height,duration:format=duration',
+        '-of', 'json',
+        videoPath
+      ], { encoding: 'utf8', timeout: 10000 });
       const probeData = JSON.parse(probeOutput);
 
       if (probeData.streams && probeData.streams[0]) {
@@ -355,18 +358,12 @@ class BlueskyService {
         title: title,
         author: author,
         platform: 'Bluesky',
-        fileSize: this._formatFileSize(totalBytes)
+        fileSize: formatFileSize(totalBytes)
       }
     };
   }
 
-  _formatFileSize(bytes) {
-    if (!bytes || bytes === 0) return 'Unknown';
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    if (i === 0) return `${bytes} ${sizes[i]}`;
-    return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
-  }
+
 }
 
 module.exports = new BlueskyService();

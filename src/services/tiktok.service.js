@@ -220,12 +220,15 @@ class TikTokService {
       const musicUrl = extractUrl(data.music?.playUrl) || extractUrl(data.music?.play_url);
       if (musicUrl) {
         try {
-          const { execSync } = require('child_process');
+          const { execFileSync } = require('child_process');
           // Probe audio bitrate of downloaded video
-          const audioBitrateStr = execSync(
-            `ffprobe -v error -select_streams a:0 -show_entries stream=bit_rate -of default=noprint_wrappers=1:nokey=1 "${videoPath}"`,
-            { encoding: 'utf8', timeout: 10000 }
-          ).trim();
+          const audioBitrateStr = execFileSync('ffprobe', [
+            '-v', 'error',
+            '-select_streams', 'a:0',
+            '-show_entries', 'stream=bit_rate',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            videoPath
+          ], { encoding: 'utf8', timeout: 10000 }).trim();
           const audioBitrate = parseInt(audioBitrateStr) || 0;
           logger.info(`Video audio bitrate: ${Math.round(audioBitrate / 1000)}kbps`);
           
@@ -248,10 +251,17 @@ class TikTokService {
             // Merge: take video from original, audio from music track
             const mergedPath = videoPath.replace('.mp4', '_merged.mp4');
             
-            execSync(
-              `ffmpeg -y -i "${videoPath}" -i "${musicPath}" -c:v copy -map 0:v:0 -map 1:a:0 -shortest -movflags +faststart "${mergedPath}"`,
-              { stdio: 'ignore', timeout: 60000 }
-            );
+            execFileSync('ffmpeg', [
+              '-y',
+              '-i', videoPath,
+              '-i', musicPath,
+              '-c:v', 'copy',
+              '-map', '0:v:0',
+              '-map', '1:a:0',
+              '-shortest',
+              '-movflags', '+faststart',
+              mergedPath
+            ], { stdio: 'ignore', timeout: 60000 });
             
             // Replace original with merged version
             await fs.unlink(videoPath);
@@ -269,11 +279,14 @@ class TikTokService {
       
       // Check frame rate and re-encode if too high (>60fps causes playback issues on Telegram/mobile)
       try {
-        const { execSync } = require('child_process');
-        const fpsOutput = execSync(
-          `ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 "${finalVideoPath}"`,
-          { encoding: 'utf8', timeout: 10000 }
-        ).trim();
+        const { execFileSync } = require('child_process');
+        const fpsOutput = execFileSync('ffprobe', [
+          '-v', 'error',
+          '-select_streams', 'v:0',
+          '-show_entries', 'stream=r_frame_rate',
+          '-of', 'default=noprint_wrappers=1:nokey=1',
+          finalVideoPath
+        ], { encoding: 'utf8', timeout: 10000 }).trim();
         
         // Parse frame rate (format: "120/1" or "30000/1001")
         const [num, den] = fpsOutput.split('/').map(Number);
@@ -286,10 +299,17 @@ class TikTokService {
           
           const reencodedPath = finalVideoPath.replace('.mp4', '_30fps.mp4');
           
-          execSync(
-            `ffmpeg -i "${finalVideoPath}" -r 30 -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -movflags +faststart "${reencodedPath}"`,
-            { stdio: 'ignore', timeout: 180000 } // 3 minutes timeout
-          );
+          execFileSync('ffmpeg', [
+            '-i', finalVideoPath,
+            '-r', '30',
+            '-c:v', 'libx264',
+            '-preset', 'veryfast',
+            '-crf', '23',
+            '-c:a', 'aac',
+            '-b:a', '128k',
+            '-movflags', '+faststart',
+            reencodedPath
+          ], { stdio: 'ignore', timeout: 180000 });
           
           // Replace original with re-encoded version
           await fs.unlink(finalVideoPath);
@@ -317,11 +337,14 @@ class TikTokService {
       let width = 720, height = 1280;
       
       try {
-        const { execSync } = require('child_process');
-        const probeOutput = execSync(
-          `ffprobe -v error -select_streams v:0 -show_entries stream=width,height,duration:format=duration -of json "${finalVideoPath}"`,
-          { encoding: 'utf8', timeout: 10000 }
-        );
+        const { execFileSync } = require('child_process');
+        const probeOutput = execFileSync('ffprobe', [
+          '-v', 'error',
+          '-select_streams', 'v:0',
+          '-show_entries', 'stream=width,height,duration:format=duration',
+          '-of', 'json',
+          finalVideoPath
+        ], { encoding: 'utf8', timeout: 10000 });
         const probeData = JSON.parse(probeOutput);
         
         if (probeData.streams && probeData.streams[0]) {

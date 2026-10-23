@@ -12,6 +12,19 @@ const userRequests = new Map();
 const MAX_REQUESTS = 5;
 const WINDOW_MS = 60000;
 
+// Periodically clean up old rate limit entries (every 5 minutes)
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, requests] of userRequests.entries()) {
+    const recent = requests.filter(time => now - time < WINDOW_MS);
+    if (recent.length === 0) {
+      userRequests.delete(userId);
+    } else {
+      userRequests.set(userId, recent);
+    }
+  }
+}, 5 * 60 * 1000);
+
 const pendingYouTubeDownloads = new Map();
 const pendingInstagramDownloads = new Map();
 const pendingAudioExtracts = new Map();
@@ -41,6 +54,105 @@ function truncateTitle(title, maxLen = 200) {
   if (!title) return null;
   if (title.length <= maxLen) return title;
   return title.substring(0, maxLen) + '…';
+}
+
+/**
+ * Build a caption string for a downloaded media item.
+ * @param {object} sender - { caption: string } from getSenderInfo()
+ * @param {string} url - Original URL
+ * @param {object} info - { author, duration, fileSize, platform, quality, title }
+ * @returns {string} HTML caption
+ */
+function buildCaption(sender, url, info) {
+  const metaLines = [
+    info.title && info.title !== 'Video' && info.title !== 'Bluesky Video' && info.title !== 'Bluesky Post'
+      ? `${truncateTitle(info.title)}\n` : null,
+    `👤 ${info.author || 'Unknown'}`,
+    info.duration && info.duration !== 'Unknown' ? `⏱ ${info.duration}` : null,
+    info.fileSize && info.fileSize !== 'Unknown' ? `💾 ${info.fileSize}` : null,
+    `📱 ${info.platform || 'Unknown'}`,
+    info.quality ? `📊 ${info.quality}` : null
+  ].filter(Boolean).join('\n');
+
+  return `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${metaLines}</blockquote>`.trim();
+}
+
+/**
+ * Send media items (photos and videos) to Telegram, handling batching (max 10 per group).
+ * @param {object} ctx - Telegraf context
+ * @param {Array<{type: 'photo'|'video', path: string, thumbnailPath?: string}>} mediaItems
+ * @param {string} caption - HTML caption for the last batch
+ * @param {object} videoMeta - { width, height, duration } for video items (optional)
+ */
+async function sendMediaToTelegram(ctx, mediaItems, caption, videoMeta = {}) {
+  const TELEGRAM_MEDIA_LIMIT = 10;
+  const batches = [];
+  for (let i = 0; i < mediaItems.length; i += TELEGRAM_MEDIA_LIMIT) {
+    batches.push(mediaItems.slice(i, i + TELEGRAM_MEDIA_LIMIT));
+  }
+
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const batch = batches[batchIndex];
+    const isLastBatch = batchIndex === batches.length - 1;
+
+    if (batch.length === 1 && batches.length === 1) {
+      const item = batch[0];
+      if (item.type === 'photo') {
+        await ctx.replyWithPhoto(getFileForTelegram(item.path), { caption, parse_mode: 'HTML' });
+      } else {
+        const opts = {
+          caption, parse_mode: 'HTML', supports_streaming: true,
+          width: videoMeta.width, height: videoMeta.height, duration: videoMeta.duration
+        };
+        if (item.thumbnailPath) opts.thumbnail = getFileForTelegram(item.thumbnailPath);
+        await ctx.replyWithVideo(getFileForTelegram(item.path), opts);
+      }
+    } else {
+      const mediaGroup = batch.map((item, index) => ({
+        type: item.type,
+        media: getFileForTelegram(item.path),
+        caption: isLastBatch && index === 0 ? caption : undefined,
+        parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined,
+        thumbnail: item.thumbnailPath ? getFileForTelegram(item.thumbnailPath) : undefined,
+        ...(item.type === 'video' ? {
+          supports_streaming: true,
+          width: videoMeta.width, height: videoMeta.height, duration: videoMeta.duration
+        } : {})
+      }));
+
+      try {
+        await ctx.replyWithMediaGroup(mediaGroup);
+      } catch (sendError) {
+        if (sendError.message?.includes('caption is too long') || sendError.description?.includes('caption is too long')) {
+          logger.warn(`Caption too long for batch ${batchIndex + 1}, retrying without caption`);
+          const fallbackGroup = batch.map(item => ({
+            type: item.type,
+            media: getFileForTelegram(item.path),
+          }));
+          await ctx.replyWithMediaGroup(fallbackGroup);
+        } else {
+          throw sendError;
+        }
+      }
+    }
+    logger.info(`Sent batch ${batchIndex + 1}/${batches.length} (${batch.length} item(s))`);
+  }
+}
+
+/**
+ * Delete the user's original message and the status message.
+ */
+async function cleanupMessages(ctx, statusMessageId, originalMessageId) {
+  try {
+    if (originalMessageId) {
+      await ctx.telegram.deleteMessage(ctx.chat.id, originalMessageId);
+    }
+  } catch {
+    logger.warn('Could not delete user message (bot might not have permissions)');
+  }
+  if (statusMessageId) {
+    await ctx.telegram.deleteMessage(ctx.chat.id, statusMessageId).catch(() => {});
+  }
 }
 
 // Check if bot is using local Bot API server
@@ -414,42 +526,16 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
           );
           
           const sender = getSenderInfo(ctx);
+          const caption = buildCaption(sender, url, result.info);
           
-          const bskyMetaLines = [
-            result.info.title && result.info.title !== 'Bluesky Video' ? `${truncateTitle(result.info.title)}\n` : null,
-            `👤 ${result.info.author}`,
-            result.info.duration && result.info.duration !== 'Unknown' ? `⏱ ${result.info.duration}` : null,
-            `💾 ${result.info.fileSize}`,
-            `📱 ${result.info.platform}`,
-            result.info.quality ? `📊 ${result.info.quality}` : null
-          ].filter(Boolean).join('\n');
-          
-          const videoOptions = {
-            caption: `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${bskyMetaLines}</blockquote>`.trim(),
-            parse_mode: 'HTML',
-            supports_streaming: true,
-            width: result.width,
-            height: result.height,
-            duration: result.duration
-          };
-          
-          if (thumbnailPath) {
-            videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
-          }
-          
-          await ctx.replyWithVideo(
-            getFileForTelegram(result.filePath),
-            videoOptions
+          await sendMediaToTelegram(
+            ctx,
+            [{ type: 'video', path: result.filePath, thumbnailPath: thumbnailPath || undefined }],
+            caption,
+            { width: result.width, height: result.height, duration: result.duration }
           );
           
-          try {
-            await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
-          } catch (error) {
-            logger.warn('Could not delete user message (bot might not have permissions)');
-          }
-          
-          await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-          
+          await cleanupMessages(ctx, statusMessage.message_id, ctx.message.message_id);
           logger.info(`Bluesky video sent successfully to ${userInfo}`);
           return;
         }
@@ -468,48 +554,11 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
           );
           
           const sender = getSenderInfo(ctx);
+          const caption = buildCaption(sender, url, result.info);
+          const mediaItems = result.imagePaths.map(imagePath => ({ type: 'photo', path: imagePath }));
           
-          const titleText = truncateTitle(result.info.title, 800);
-          const slideshowCaption = `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${titleText && titleText !== 'Bluesky Post' ? titleText + '\n' : ''}👤 ${result.info.author}\n💾 ${result.info.fileSize}\n📱 ${result.info.platform}</blockquote>`.trim();
-          
-          // Telegram allows max 10 media per group
-          const TELEGRAM_MEDIA_LIMIT = 10;
-          const batches = [];
-          
-          for (let i = 0; i < result.imagePaths.length; i += TELEGRAM_MEDIA_LIMIT) {
-            batches.push(result.imagePaths.slice(i, i + TELEGRAM_MEDIA_LIMIT));
-          }
-          
-          for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-            const batch = batches[batchIndex];
-            const isLastBatch = batchIndex === batches.length - 1;
-            
-            if (batch.length === 1 && batches.length === 1) {
-              await ctx.replyWithPhoto(
-                getFileForTelegram(batch[0]),
-                { caption: slideshowCaption, parse_mode: 'HTML' }
-              );
-            } else {
-              const mediaGroup = batch.map((imagePath, index) => ({
-                type: 'photo',
-                media: getFileForTelegram(imagePath),
-                caption: isLastBatch && index === 0 ? slideshowCaption : undefined,
-                parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined
-              }));
-              
-              await ctx.replyWithMediaGroup(mediaGroup);
-            }
-            logger.info(`Sent batch ${batchIndex + 1}/${batches.length} (${batch.length} image(s))`);
-          }
-          
-          try {
-            await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
-          } catch (error) {
-            logger.warn('Could not delete user message (bot might not have permissions)');
-          }
-          
-          await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-          
+          await sendMediaToTelegram(ctx, mediaItems, caption);
+          await cleanupMessages(ctx, statusMessage.message_id, ctx.message.message_id);
           logger.info(`Bluesky images sent successfully to ${userInfo}`);
           return;
         }
@@ -553,35 +602,16 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
           );
           
           const sender = getSenderInfo(ctx);
+          const caption = buildCaption(sender, url, result.info);
           
-          const qualityLine = result.info.quality ? `📊 Quality: ${result.info.quality}\n` : '';
-          
-          const videoOptions = {
-            caption: `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${result.info.author}\n⏱ ${result.info.duration}\n💾 ${result.info.fileSize}\n📱 ${result.info.platform}\n${qualityLine}</blockquote>`.trim(),
-            parse_mode: 'HTML',
-            supports_streaming: true,
-            width: result.width,
-            height: result.height,
-            duration: result.duration
-          };
-          
-          if (thumbnailPath) {
-            videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
-          }
-          
-          await ctx.replyWithVideo(
-            getFileForTelegram(result.filePath),
-            videoOptions
+          await sendMediaToTelegram(
+            ctx,
+            [{ type: 'video', path: result.filePath, thumbnailPath: thumbnailPath || undefined }],
+            caption,
+            { width: result.width, height: result.height, duration: result.duration }
           );
           
-          try {
-            await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
-          } catch (error) {
-            logger.warn('Could not delete user message (bot might not have permissions)');
-          }
-          
-          await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-          
+          await cleanupMessages(ctx, statusMessage.message_id, ctx.message.message_id);
           logger.info(`Bluesky video (via yt-dlp) sent successfully to ${userInfo}`);
           return;
           
@@ -621,39 +651,16 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
           );
           
           const sender = getSenderInfo(ctx);
+          const caption = buildCaption(sender, url, result.info);
           
-          const videoOptions = {
-            caption: `${sender.caption} shared: <a href="${url}">Link</a>
-
-<blockquote expandable>👤 ${result.info.author}
-⏱ ${result.info.duration}
-💾 ${result.info.fileSize}
-📱 ${result.info.platform}
-📊 ${result.info.quality}</blockquote>`.trim(),
-            parse_mode: 'HTML',
-            supports_streaming: true,
-            width: result.width,
-            height: result.height,
-            duration: result.duration
-          };
-          
-          if (thumbnailPath) {
-            videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
-          }
-          
-          await ctx.replyWithVideo(
-            getFileForTelegram(result.filePath),
-            videoOptions
+          await sendMediaToTelegram(
+            ctx,
+            [{ type: 'video', path: result.filePath, thumbnailPath: thumbnailPath || undefined }],
+            caption,
+            { width: result.width, height: result.height, duration: result.duration }
           );
           
-          try {
-            await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
-          } catch (error) {
-            logger.warn('Could not delete user message (bot might not have permissions)');
-          }
-          
-          await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-          
+          await cleanupMessages(ctx, statusMessage.message_id, ctx.message.message_id);
           logger.info(`TikTok video (via API) sent successfully to ${userInfo}`);
           return;
         }
@@ -672,65 +679,11 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
           );
           
           const sender = getSenderInfo(ctx);
+          const caption = buildCaption(sender, url, result.info);
+          const mediaItems = result.imagePaths.map(p => ({ type: 'photo', path: p }));
           
-          // Telegram allows max 10 media per group, split into batches
-          const TELEGRAM_MEDIA_LIMIT = 10;
-          const batches = [];
-          
-          for (let i = 0; i < result.imagePaths.length; i += TELEGRAM_MEDIA_LIMIT) {
-            const batch = result.imagePaths.slice(i, i + TELEGRAM_MEDIA_LIMIT);
-            batches.push(batch);
-          }
-          
-          logger.info(`Sending ${result.imagePaths.length} images in ${batches.length} batch(es)`);
-          
-          // Build caption for the last batch
-          const titleText = truncateTitle(result.info.title, 800);
-          const slideshowCaption = `${sender.caption} shared: <a href="${url}">Link</a>
-
-<blockquote expandable>${titleText ? titleText + '\n' : ''}👤 ${result.info.author}
-📱 ${result.info.platform}</blockquote>`.trim();
-          
-          // Send each batch as a separate media group
-          for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-            const batch = batches[batchIndex];
-            const isLastBatch = batchIndex === batches.length - 1;
-            
-            const mediaGroup = batch.map((imagePath, index) => ({
-              type: 'photo',
-              media: getFileForTelegram(imagePath),
-              // Only add caption to first image of last batch
-              caption: isLastBatch && index === 0 ? slideshowCaption : undefined,
-              parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined
-            }));
-            
-            try {
-              await ctx.replyWithMediaGroup(mediaGroup);
-            } catch (sendError) {
-              // If caption is too long, retry without caption
-              if (sendError.message?.includes('caption is too long') || sendError.description?.includes('caption is too long')) {
-                logger.warn(`Caption too long for batch ${batchIndex + 1}, retrying without caption`);
-                const fallbackGroup = batch.map((imagePath) => ({
-                  type: 'photo',
-                  media: getFileForTelegram(imagePath),
-                }));
-                await ctx.replyWithMediaGroup(fallbackGroup);
-              } else {
-                throw sendError;
-              }
-            }
-            logger.info(`Sent batch ${batchIndex + 1}/${batches.length} (${batch.length} images)`);
-          }
-          
-          // Delete the user's message after successful upload
-          try {
-            await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
-          } catch (error) {
-            logger.warn('Could not delete user message (bot might not have permissions)');
-          }
-          
-          await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-          
+          await sendMediaToTelegram(ctx, mediaItems, caption);
+          await cleanupMessages(ctx, statusMessage.message_id, ctx.message.message_id);
           logger.info(`TikTok slideshow sent successfully to ${userInfo}`);
           return;
         }
@@ -769,41 +722,16 @@ async function processDownload(ctx, url, statusMessage, userInfo) {
           );
           
           const sender = getSenderInfo(ctx);
+          const caption = buildCaption(sender, url, result.info);
           
-          const qualityLine = result.info.quality ? `📊 Quality: ${result.info.quality}\n` : '';
-          
-          const videoOptions = {
-            caption: `${sender.caption} shared: <a href="${url}">Link</a>
-
-<blockquote expandable>👤 ${result.info.author}
-⏱ ${result.info.duration}
-💾 ${result.info.fileSize}
-📱 ${result.info.platform}
-${qualityLine}</blockquote>`.trim(),
-            parse_mode: 'HTML',
-            supports_streaming: true,
-            width: result.width,
-            height: result.height,
-            duration: result.duration
-          };
-          
-          if (thumbnailPath) {
-            videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
-          }
-          
-          await ctx.replyWithVideo(
-            getFileForTelegram(result.filePath),
-            videoOptions
+          await sendMediaToTelegram(
+            ctx,
+            [{ type: 'video', path: result.filePath, thumbnailPath: thumbnailPath || undefined }],
+            caption,
+            { width: result.width, height: result.height, duration: result.duration }
           );
           
-          try {
-            await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
-          } catch (error) {
-            logger.warn('Could not delete user message (bot might not have permissions)');
-          }
-          
-          await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-          
+          await cleanupMessages(ctx, statusMessage.message_id, ctx.message.message_id);
           logger.info(`TikTok video (via yt-dlp) sent successfully to ${userInfo}`);
           return;
           
@@ -837,36 +765,12 @@ ${qualityLine}</blockquote>`.trim(),
       );
       
       if (result.imagePaths && result.imagePaths.length > 0) {
-        const TELEGRAM_MEDIA_LIMIT = 10;
-        const batches = [];
-        
-        for (let i = 0; i < result.imagePaths.length; i += TELEGRAM_MEDIA_LIMIT) {
-          batches.push(result.imagePaths.slice(i, i + TELEGRAM_MEDIA_LIMIT));
-        }
-        
-        for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-          const batch = batches[batchIndex];
-          const isLastBatch = batchIndex === batches.length - 1;
-          
-          const mediaGroup = batch.map((imagePath, index) => ({
-            type: 'photo',
-            media: getFileForTelegram(imagePath),
-            caption: isLastBatch && index === 0 ? `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${result.info?.author || 'Unknown'}\n📱 ${result.info?.platform || 'Unknown'}</blockquote>`.trim() : undefined,
-            parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined
-          }));
-          
-          if (batch.length === 1 && batches.length === 1) {
-            await ctx.replyWithPhoto(mediaGroup[0].media, { caption: mediaGroup[0].caption, parse_mode: 'HTML' });
-          } else {
-            await ctx.replyWithMediaGroup(mediaGroup);
-          }
-        }
+        const caption = buildCaption(sender, url, result.info || {});
+        const mediaItems = result.imagePaths.map(p => ({ type: 'photo', path: p }));
+        await sendMediaToTelegram(ctx, mediaItems, caption);
       }
       
-      try {
-        await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
-      } catch (error) {}
-      await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+      await cleanupMessages(ctx, statusMessage.message_id, ctx.message.message_id);
       return;
     }
 
@@ -883,42 +787,16 @@ ${qualityLine}</blockquote>`.trim(),
     );
     
     const sender = getSenderInfo(ctx);
+    const caption = buildCaption(sender, url, result.info);
     
-    const qualityLine = result.info.quality ? `📊 Quality: ${result.info.quality}\n` : '';
-    const fileSizeLine = result.info.fileSize ? `💾 Size: ${result.info.fileSize}\n` : '';
-    
-    const videoOptions = {
-      caption: `${sender.caption} shared: <a href="${url}">Link</a>
-
-<blockquote expandable>👤 ${result.info.author}
-⏱ ${result.info.duration}
-💾 ${result.info.fileSize}
-📱 ${result.info.platform}
-${qualityLine}</blockquote>`.trim(),
-      parse_mode: 'HTML',
-      supports_streaming: true,
-      width: result.width,
-      height: result.height,
-      duration: result.duration
-    };
-    
-    if (thumbnailPath) {
-      videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
-    }
-    
-    await ctx.replyWithVideo(
-      getFileForTelegram(result.filePath),
-      videoOptions
+    await sendMediaToTelegram(
+      ctx,
+      [{ type: 'video', path: result.filePath, thumbnailPath: thumbnailPath || undefined }],
+      caption,
+      { width: result.width, height: result.height, duration: result.duration }
     );
     
-    try {
-      await ctx.telegram.deleteMessage(ctx.chat.id, ctx.message.message_id);
-    } catch (error) {
-      logger.warn('Could not delete user message (bot might not have permissions)');
-    }
-    
-    await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-    
+    await cleanupMessages(ctx, statusMessage.message_id, ctx.message.message_id);
     logger.info(`Video sent successfully to ${userInfo}`);
     
   } catch (error) {
@@ -1101,25 +979,16 @@ async function processInstagramDownload(ctx, url, statusMessage, userInfo, imgIn
       );
       
       const sender = getSenderInfo(ctx);
-      const qualityLine = videoResult.info.quality ? `📊 Quality: ${videoResult.info.quality}\n` : '';
+      const caption = buildCaption(sender, url, videoResult.info);
       
-      const videoOptions = {
-        caption: `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>👤 ${videoResult.info.author}\n⏱ ${videoResult.info.duration}\n💾 ${videoResult.info.fileSize}\n📱 ${videoResult.info.platform}\n${qualityLine}</blockquote>`.trim(),
-        parse_mode: 'HTML',
-        supports_streaming: true,
-        width: videoResult.width,
-        height: videoResult.height,
-        duration: videoResult.duration
-      };
+      await sendMediaToTelegram(
+        ctx,
+        [{ type: 'video', path: filePath, thumbnailPath: thumbnailPath || undefined }],
+        caption,
+        { width: videoResult.width, height: videoResult.height, duration: videoResult.duration }
+      );
       
-      if (thumbnailPath) {
-        videoOptions.thumbnail = getFileForTelegram(thumbnailPath);
-      }
-      
-      await ctx.replyWithVideo(getFileForTelegram(filePath), videoOptions);
-      
-      try { await ctx.telegram.deleteMessage(ctx.chat.id, originalMessageId); } catch {}
-      await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+      await cleanupMessages(ctx, statusMessage.message_id, originalMessageId);
       logger.info(`Instagram video sent successfully to ${userInfo}`);
       return;
     }
@@ -1155,70 +1024,15 @@ async function processInstagramDownload(ctx, url, statusMessage, userInfo, imgIn
       }
     }
     
-    const TELEGRAM_MEDIA_LIMIT = 10;
-    const batches = [];
-    for (let i = 0; i < allMedia.length; i += TELEGRAM_MEDIA_LIMIT) {
-      batches.push(allMedia.slice(i, i + TELEGRAM_MEDIA_LIMIT));
-    }
+    const caption = buildCaption(sender, url, result.info);
     
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-      const batch = batches[batchIndex];
-      const isLastBatch = batchIndex === batches.length - 1;
-      
-      if (batch.length === 1 && batches.length === 1) {
-        const item = batch[0];
-        const metaLines = [
-          `👤 ${result.info.author}`,
-          result.info.duration ? `⏱ ${result.info.duration}` : null,
-          `💾 ${result.info.fileSize}`,
-          `📱 ${result.info.platform}`,
-          result.info.title ? `\n${truncateTitle(result.info.title)}` : null
-        ].filter(Boolean).join('\n');
-        const caption = `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${metaLines}</blockquote>`.trim();
-        
-        if (item.type === 'photo') {
-          await ctx.replyWithPhoto(getFileForTelegram(item.path), { caption, parse_mode: 'HTML' });
-        } else {
-          await ctx.replyWithVideo(getFileForTelegram(item.path), { 
-            caption, 
-            parse_mode: 'HTML', 
-            supports_streaming: true,
-            width: result.width, 
-            height: result.height, 
-            duration: result.duration,
-            thumbnail: item.thumbnailPath ? getFileForTelegram(item.thumbnailPath) : undefined
-          });
-        }
-      } else {
-        const mediaMetaLines = [
-          `👤 ${result.info.author}`,
-          result.info.duration ? `⏱ ${result.info.duration}` : null,
-          `💾 ${result.info.fileSize}`,
-          `📱 ${result.info.platform}`,
-          result.info.title ? `\n${truncateTitle(result.info.title)}` : null
-        ].filter(Boolean).join('\n');
-        const mediaCaption = `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${mediaMetaLines}</blockquote>`.trim();
-        
-        const mediaGroup = batch.map((item, index) => ({
-          type: item.type,
-          media: getFileForTelegram(item.path),
-          caption: isLastBatch && index === 0 ? mediaCaption : undefined,
-          parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined,
-          thumbnail: item.thumbnailPath ? getFileForTelegram(item.thumbnailPath) : undefined,
-          ...(item.type === 'video' ? { 
-            supports_streaming: true, 
-            width: result.width, 
-            height: result.height, 
-            duration: result.duration 
-          } : {})
-        }));
-        
-        await ctx.replyWithMediaGroup(mediaGroup);
-      }
-    }
+    await sendMediaToTelegram(ctx, allMedia, caption, {
+      width: result.width,
+      height: result.height,
+      duration: result.duration
+    });
     
-    try { await ctx.telegram.deleteMessage(ctx.chat.id, originalMessageId); } catch {}
-    await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+    await cleanupMessages(ctx, statusMessage.message_id, originalMessageId);
     logger.info(`Instagram post sent successfully to ${userInfo}`);
   } catch (error) {
     logger.error(`Instagram download failed for ${userInfo}: ${error.message}`);

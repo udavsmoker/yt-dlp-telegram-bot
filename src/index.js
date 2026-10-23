@@ -2,7 +2,7 @@ const { Telegraf } = require('telegraf');
 const { message } = require('telegraf/filters');
 const config = require('./config');
 const logger = require('./utils/logger');
-const { loggingMiddleware, errorHandler, rateLimiter } = require('./middleware');
+const { loggingMiddleware, errorHandler } = require('./middleware');
 const { markovLearningMiddleware, markovResponseHandler } = require('./middleware/markov.middleware');
 const { photoLearningMiddleware } = require('./middleware/photo.middleware');
 const { blacklistCheckMiddleware } = require('./middleware/blacklist.middleware');
@@ -19,7 +19,7 @@ const settingsService = require('./services/settings.service');
 const memeService = require('./services/meme.service');
 const demotivatorService = require('./services/demotivator.service');
 const photoDb = require('./services/photo-database.service');
-const { ensureDir } = require('./utils/helpers');
+const { ensureDir, startTempCleanup } = require('./utils/helpers');
 
 if (!config.botToken) {
   logger.error('BOT_TOKEN is not set in environment variables');
@@ -122,6 +122,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 async function startBot() {
   try {
     await ensureDir(config.download.tempDir);
+    startTempCleanup(config.download.tempDir);
     await ensureDir('./logs');
     await ensureDir('./data');
     await ensureDir('./templates');

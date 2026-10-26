@@ -4,8 +4,8 @@ const path = require('path');
 const logger = require('../utils/logger');
 
 class SettingsService {
-  constructor() {
-    this.dbPath = path.join(__dirname, '../../data/settings.db');
+  constructor(customDbPath = null) {
+    this.dbPath = customDbPath || path.join(__dirname, '../../data/settings.db');
     this.legacyJsonPath = path.join(__dirname, '../../data/settings.json');
     this.db = null;
     this.settings = new Map();
@@ -20,13 +20,17 @@ class SettingsService {
 
   async init() {
     try {
-      const dataDir = path.dirname(this.dbPath);
-      if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
+      if (this.dbPath !== ':memory:') {
+        const dataDir = path.dirname(this.dbPath);
+        if (!fs.existsSync(dataDir)) {
+          fs.mkdirSync(dataDir, { recursive: true });
+        }
       }
 
       this.db = new Database(this.dbPath);
-      this.db.pragma('journal_mode = WAL');
+      if (this.dbPath !== ':memory:') {
+        this.db.pragma('journal_mode = WAL');
+      }
 
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS chat_settings (
@@ -158,4 +162,6 @@ class SettingsService {
   }
 }
 
-module.exports = new SettingsService();
+const instance = new SettingsService();
+instance.SettingsService = SettingsService;
+module.exports = instance;

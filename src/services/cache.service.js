@@ -6,32 +6,38 @@ const config = require('../config');
 const logger = require('../utils/logger');
 
 class CacheService {
-  constructor() {
+  constructor(customDbPath = null) {
     this.enabled = config.cache?.enabled !== false;
     this.ttlMs = (config.cache?.ttlHours || 48) * 60 * 60 * 1000;
     this.db = null;
 
     if (this.enabled) {
-      this.initDatabase();
-      this.cleanupInterval = setInterval(() => {
-        this.cleanExpired();
-      }, 60 * 60 * 1000);
-      if (this.cleanupInterval.unref) {
-        this.cleanupInterval.unref();
+      this.initDatabase(customDbPath);
+      if (customDbPath !== ':memory:') {
+        this.cleanupInterval = setInterval(() => {
+          this.cleanExpired();
+        }, 60 * 60 * 1000);
+        if (this.cleanupInterval.unref) {
+          this.cleanupInterval.unref();
+        }
       }
     }
   }
 
-
-  initDatabase() {
+  initDatabase(customDbPath = null) {
     try {
-      const dbDir = path.join(__dirname, '../../data');
-      if (!fs.existsSync(dbDir)) {
-        fs.mkdirSync(dbDir, { recursive: true });
+      const dbTarget = customDbPath || path.join(__dirname, '../../data/cache.db');
+      if (dbTarget !== ':memory:') {
+        const dbDir = path.dirname(dbTarget);
+        if (!fs.existsSync(dbDir)) {
+          fs.mkdirSync(dbDir, { recursive: true });
+        }
       }
 
-      this.db = new Database(path.join(dbDir, 'cache.db'));
-      this.db.pragma('journal_mode = WAL');
+      this.db = new Database(dbTarget);
+      if (dbTarget !== ':memory:') {
+        this.db.pragma('journal_mode = WAL');
+      }
 
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS video_cache (
@@ -276,4 +282,6 @@ class CacheService {
   }
 }
 
-module.exports = new CacheService();
+const instance = new CacheService();
+instance.CacheService = CacheService;
+module.exports = instance;

@@ -3,9 +3,9 @@ const path = require('path');
 const logger = require('../utils/logger');
 
 class BlacklistService {
-  constructor() {
-    this.dataDir = path.join(__dirname, '../../data');
-    this.blacklistPath = path.join(this.dataDir, 'blacklist.json');
+  constructor(customFilePath = null) {
+    this.dataDir = customFilePath ? path.dirname(customFilePath) : path.join(__dirname, '../../data');
+    this.blacklistPath = customFilePath || path.join(this.dataDir, 'blacklist.json');
     this.blacklist = this.loadBlacklist();
     
     // Offensive responses for blacklisted users
@@ -105,4 +105,6 @@ class BlacklistService {
   }
 }
 
-module.exports = new BlacklistService();
+const instance = new BlacklistService();
+instance.BlacklistService = BlacklistService;
+module.exports = instance;

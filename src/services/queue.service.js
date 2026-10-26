@@ -14,7 +14,7 @@ class ProgressReporter {
   }
 
   update(text) {
-    if (!text || text === this.lastText) return;
+    if (this.stopped || !text || text === this.lastText) return;
     this.pendingText = text;
 
     const now = Date.now();
@@ -30,7 +30,7 @@ class ProgressReporter {
   }
 
   async flush() {
-    if (this.isEditing) return;
+    if (this.stopped || this.isEditing) return;
     if (!this.pendingText || this.pendingText === this.lastText) return;
 
     const textToSend = this.pendingText;
@@ -49,7 +49,7 @@ class ProgressReporter {
       // Suppress rate limits or duplicate edit errors
     } finally {
       this.isEditing = false;
-      if (this.pendingText && this.pendingText !== this.lastText && !this.timer) {
+      if (!this.stopped && this.pendingText && this.pendingText !== this.lastText && !this.timer) {
         this.timer = setTimeout(() => {
           this.timer = null;
           this.flush();
@@ -59,6 +59,8 @@ class ProgressReporter {
   }
 
   stop() {
+    this.stopped = true;
+    this.pendingText = null;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -168,4 +170,7 @@ class QueueService {
   }
 }
 
-module.exports = new QueueService();
+const instance = new QueueService();
+instance.QueueService = QueueService;
+instance.ProgressReporter = ProgressReporter;
+module.exports = instance;

@@ -11,7 +11,7 @@ class TikTokService {
    * Download TikTok content (video or slideshow) using the TikTok API
    * This is used as a fallback when yt-dlp fails
    */
-  async downloadTikTokContent(url) {
+  async downloadTikTokContent(url, onProgress = null) {
     try {
       logger.info(`Downloading TikTok content using @tobyg74/tiktok-api-dl: ${url}`);
       
@@ -49,7 +49,7 @@ class TikTokService {
         }
         const data = result.result;
         logger.info(`TikTok data type: ${data.type}`);
-        if (data.type === 'video') return await this._downloadVideo(data, url);
+        if (data.type === 'video') return await this._downloadVideo(data, url, onProgress);
         if (data.type === 'image') return await this._downloadSlideshow(data, result);
         throw new Error(`Unknown TikTok content type: ${data.type}`);
       }
@@ -87,7 +87,7 @@ class TikTokService {
         logger.info(`Merged ${mergedData._videoUrls.length} video URLs from APIs`);
         logger.debug(`URL priorities: ${mergedData._videoUrls.map(u => u.quality).join(' > ')}`);
 
-        return await this._downloadVideo(mergedData, url);
+        return await this._downloadVideo(mergedData, url, onProgress);
       }
       
       // Handle slideshow/image type
@@ -112,7 +112,7 @@ class TikTokService {
   /**
    * Download TikTok video using API data
    */
-  async _downloadVideo(data, originalUrl) {
+  async _downloadVideo(data, originalUrl, onProgress = null) {
     logger.info('Downloading TikTok video via API');
     
     // Helper to extract URL from value (could be string, array of strings, or array of objects)
@@ -183,10 +183,23 @@ class TikTokService {
           const fsSync = require('fs');
           const writer = fsSync.createWriteStream(videoPath);
           let downloadedBytes = 0;
+          const startTime = Date.now();
           
           await new Promise((resolve, reject) => {
             streamResponse.data.on('data', (chunk) => {
               downloadedBytes += chunk.length;
+              if (onProgress && contentLength > 0) {
+                const percent = Math.min(100, (downloadedBytes / contentLength) * 100);
+                const elapsedSec = (Date.now() - startTime) / 1000;
+                const speedBytes = elapsedSec > 0 ? downloadedBytes / elapsedSec : 0;
+                const speed = speedBytes > 1024 * 1024
+                  ? `${(speedBytes / (1024 * 1024)).toFixed(2)}MiB/s`
+                  : `${(speedBytes / 1024).toFixed(1)}KiB/s`;
+                const remBytes = Math.max(0, contentLength - downloadedBytes);
+                const etaSec = speedBytes > 0 ? Math.round(remBytes / speedBytes) : 0;
+                const eta = `${Math.floor(etaSec / 60)}:${String(etaSec % 60).padStart(2, '0')}`;
+                onProgress({ percent, speed, eta });
+              }
               if (downloadedBytes > 50 * 1024 * 1024) {
                 streamResponse.data.destroy();
                 writer.destroy();
@@ -462,8 +475,8 @@ class TikTokService {
   }
 
   // Keep old method name for backwards compatibility
-  async downloadTikTokSlideshow(url) {
-    return this.downloadTikTokContent(url);
+  async downloadTikTokSlideshow(url, onProgress = null) {
+    return this.downloadTikTokContent(url, onProgress);
   }
 }
 

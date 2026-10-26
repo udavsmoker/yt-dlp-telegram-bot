@@ -429,6 +429,26 @@ function startTempCleanup(dirPath, maxAgeMs = 30 * 60 * 1000, intervalMs = 10 * 
   setInterval(cleanup, intervalMs);
 }
 
+/**
+ * Format a visual progress bar with speed and ETA.
+ */
+function renderProgressBar(percent, speed, eta) {
+  const totalBars = 10;
+  const clamped = Math.max(0, Math.min(100, Math.round(percent || 0)));
+  const filled = Math.round((clamped / 100) * totalBars);
+  const empty = totalBars - filled;
+  const bar = '█'.repeat(filled) + '░'.repeat(empty);
+
+  const lines = [`⬇️ Downloading: [${bar}] ${clamped}%`];
+  if (speed && !['Unknown B/s', '---b/s', 'N/A', 'NA'].includes(speed.trim())) {
+    lines.push(`⚡ Speed: ${speed.trim()}`);
+  }
+  if (eta && !['Unknown', '--:--', 'NA', 'N/A'].includes(eta.trim())) {
+    lines.push(`⏱ ETA: ${eta.trim()}`);
+  }
+  return lines.join('\n');
+}
+
 module.exports = {
   extractUrl,
   ensureDir,
@@ -449,5 +469,7 @@ module.exports = {
   isBlueskyPostUrl,
   formatFileSize,
   formatDuration,
+  renderProgressBar,
   startTempCleanup
 };
+

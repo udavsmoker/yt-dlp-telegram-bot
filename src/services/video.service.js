@@ -26,7 +26,12 @@ class VideoService {
     this.ytdlpPath = 'yt-dlp';
   }
 
-  async download(url) {
+  async download(url, options = {}, onProgress = null) {
+    if (typeof options === 'function') {
+      onProgress = options;
+      options = {};
+    }
+
     try {
       logger.info(`Starting download with yt-dlp: ${url}`);
       
@@ -140,7 +145,10 @@ class VideoService {
         { name: 'worst quality', format: 'worst' },
       ];
 
-      const formatStrategies = isYouTube ? youtubeStrategies : usesHLS ? hlsStrategies : genericStrategies;
+      let formatStrategies = isYouTube ? youtubeStrategies : usesHLS ? hlsStrategies : genericStrategies;
+      if (options.format) {
+        formatStrategies = [{ name: options.qualityName || 'custom requested', format: options.format }, ...formatStrategies];
+      }
 
       let downloadedFilePath = null;
       let usedQuality = null;
@@ -193,7 +201,47 @@ class VideoService {
 
           let downloadOutput;
           try {
-            downloadOutput = await youtubedl(url, ytdlpOptions);
+            const execOptions = {
+              ...ytdlpOptions,
+              newline: true,
+              progress: true,
+              progressTemplate: 'download:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s'
+            };
+
+            const proc = youtubedl.exec(url, execOptions);
+
+            if (onProgress && proc.stdout) {
+              const handleChunk = (chunk) => {
+                const text = chunk.toString();
+                const lines = text.split('\n');
+                for (const line of lines) {
+                  // Custom template format: [download:] <percent>%|<speed>|<eta>
+                  let m = line.match(/(?:download:)?\s*(\d+\.?\d*)%\|\s*([^|]+)\|\s*([^\r\n]+)/);
+                  if (m) {
+                    onProgress({
+                      percent: parseFloat(m[1]),
+                      speed: m[2].trim(),
+                      eta: m[3].trim()
+                    });
+                    continue;
+                  }
+                  // Fallback for standard yt-dlp progress lines
+                  m = line.match(/\[download\]\s+(\d+\.?\d*)%.*?\bat\s+(\S+).*?\bETA\s+(\S+)/);
+                  if (m) {
+                    onProgress({
+                      percent: parseFloat(m[1]),
+                      speed: m[2].trim(),
+                      eta: m[3].trim()
+                    });
+                  }
+                }
+              };
+
+              proc.stdout.on('data', handleChunk);
+              if (proc.stderr) proc.stderr.on('data', handleChunk);
+            }
+
+            downloadOutput = await proc;
             if (downloadOutput) {
               logger.debug(`yt-dlp output for ${strategy.name}: ${JSON.stringify(downloadOutput).substring(0, 200)}`);
             }
@@ -514,24 +562,24 @@ class VideoService {
 
 
 
-  async downloadTikTokSlideshow(url) {
-    return await tiktokService.downloadTikTokSlideshow(url);
+  async downloadTikTokSlideshow(url, onProgress = null) {
+    return await tiktokService.downloadTikTokSlideshow(url, onProgress);
   }
 
   /**
    * Download Instagram post (photos/videos) using instagram-url-direct
    * Delegates to instagramService for the actual download
    */
-  async downloadInstagramPost(url, imgIndex = null) {
-    return await instagramService.downloadInstagramPost(url, imgIndex);
+  async downloadInstagramPost(url, imgIndex = null, onProgress = null) {
+    return await instagramService.downloadInstagramPost(url, imgIndex, onProgress);
   }
 
   /**
    * Download Bluesky post (video/images) using the AT Protocol API
    * Delegates to blueskyService for the actual download
    */
-  async downloadBlueskyPost(url) {
-    return await blueskyService.downloadBlueskyPost(url);
+  async downloadBlueskyPost(url, onProgress = null) {
+    return await blueskyService.downloadBlueskyPost(url, onProgress);
   }
 }
 

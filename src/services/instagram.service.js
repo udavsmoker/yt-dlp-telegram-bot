@@ -34,7 +34,7 @@ class InstagramService {
    * Download Instagram content (photos or video) from a post URL
    * Handles single images, carousels, and videos/Reels
    */
-  async downloadInstagramPost(url, imgIndex = null) {
+  async downloadInstagramPost(url, imgIndex = null, onProgress = null) {
     try {
       logger.info(`Downloading Instagram post using btch-downloader (igdl): ${url}`);
 
@@ -217,6 +217,19 @@ class InstagramService {
         
         try {
           let response;
+          const makeProgressHandler = () => (progressEvent) => {
+            if (onProgress && progressEvent.total) {
+              const percent = Math.min(100, (progressEvent.loaded / progressEvent.total) * 100);
+              const speedBytes = progressEvent.rate || 0;
+              const speed = speedBytes > 1024 * 1024
+                ? `${(speedBytes / (1024 * 1024)).toFixed(2)}MiB/s`
+                : speedBytes > 0 ? `${(speedBytes / 1024).toFixed(1)}KiB/s` : '';
+              const etaSec = progressEvent.estimated ? Math.round(progressEvent.estimated) : 0;
+              const eta = etaSec > 0 ? `${Math.floor(etaSec / 60)}:${String(etaSec % 60).padStart(2, '0')}` : '';
+              onProgress({ percent, speed, eta });
+            }
+          };
+
           try {
             response = await axios({
               method: 'GET',
@@ -227,7 +240,8 @@ class InstagramService {
                 'Referer': 'https://www.instagram.com/'
               },
               timeout: mediaType === 'video' ? 60000 : 30000,
-              maxContentLength: 50 * 1024 * 1024 // 50MB max
+              maxContentLength: 50 * 1024 * 1024,
+              onDownloadProgress: makeProgressHandler()
             });
           } catch (proxyErr) {
             // Fall back to original URL if proxy fails
@@ -242,7 +256,8 @@ class InstagramService {
                   'Referer': 'https://www.instagram.com/'
                 },
                 timeout: mediaType === 'video' ? 60000 : 30000,
-                maxContentLength: 50 * 1024 * 1024
+                maxContentLength: 50 * 1024 * 1024,
+                onDownloadProgress: makeProgressHandler()
               });
             } else {
               throw proxyErr;

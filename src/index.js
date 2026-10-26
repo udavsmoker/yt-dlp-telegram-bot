@@ -81,9 +81,8 @@ bot.command('mp3', handleMp3Command);
 bot.action(/^toggle_/, handleSettingsCallback);
 bot.action('settings_close', handleSettingsCallback);
 
-// YouTube download confirmation callbacks
-bot.action('yt_download', handleYouTubeCallback);
-bot.action('yt_cancel', handleYouTubeCallback);
+// YouTube download confirmation and quality selection callbacks
+bot.action(['yt_download', 'yt_cancel', 'ytq_1080', 'ytq_720', 'ytq_480', 'ytq_audio', 'ytq_cancel'], handleYouTubeCallback);
 bot.action('yt_audio', handleAudioCallback);
 
 // Instagram carousel selection callbacks

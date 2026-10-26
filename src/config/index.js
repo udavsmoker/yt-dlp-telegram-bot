@@ -15,5 +15,14 @@ module.exports = {
     tempDir: process.env.TEMP_DIR || './temp',
     cookiesFile: process.env.YTDLP_COOKIES_FILE || (require('fs').existsSync(require('path').join(__dirname, '../../cookies.txt')) ? require('path').join(__dirname, '../../cookies.txt') : null)
   },
-  adminUserId: parseInt(process.env.ADMIN_USER_ID || '0', 10)
+  adminUserId: parseInt(process.env.ADMIN_USER_ID || '0', 10),
+  cache: {
+    enabled: process.env.ENABLE_VIDEO_CACHE !== 'false',
+    ttlHours: parseInt(process.env.CACHE_TTL_HOURS || '48', 10)
+  },
+  queue: {
+    concurrency: parseInt(process.env.DOWNLOAD_CONCURRENCY || '2', 10)
+  }
 };
+
+

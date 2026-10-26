@@ -75,7 +75,7 @@ class BlueskyService {
    * Returns a result object compatible with the download handler
    * (same shape as TikTok/Instagram services).
    */
-  async downloadBlueskyPost(url) {
+  async downloadBlueskyPost(url, onProgress = null) {
     try {
       logger.info(`Downloading Bluesky post: ${url}`);
       await ensureDir(config.download.tempDir);
@@ -94,7 +94,7 @@ class BlueskyService {
 
       // Video post
       if (embedType === 'app.bsky.embed.video#view') {
-        return await this._downloadVideo(post, did, author, postText);
+        return await this._downloadVideo(post, did, author, postText, onProgress);
       }
 
       // Image post
@@ -108,7 +108,7 @@ class BlueskyService {
         if (innerEmbed?.$type === 'app.bsky.embed.video#view') {
           // Substitute inner embed as the post embed for download
           const modifiedPost = { ...post, embed: innerEmbed };
-          return await this._downloadVideo(modifiedPost, did, author, postText);
+          return await this._downloadVideo(modifiedPost, did, author, postText, onProgress);
         }
         if (innerEmbed?.$type === 'app.bsky.embed.images#view') {
           const modifiedPost = { ...post, embed: innerEmbed };
@@ -138,7 +138,7 @@ class BlueskyService {
    * Primary: direct blob download (original MP4, best quality).
    * The blob CID comes from the record's embed, not the view.
    */
-  async _downloadVideo(post, did, author, postText) {
+  async _downloadVideo(post, did, author, postText, onProgress = null) {
     logger.info('Downloading Bluesky video via blob API');
 
     // Extract video CID from the record embed (original blob reference)
@@ -193,10 +193,24 @@ class BlueskyService {
 
       const writer = fsSync.createWriteStream(videoPath);
       let downloadedBytes = 0;
+      const totalExpected = contentLength > 0 ? contentLength : videoSize;
+      const startTime = Date.now();
 
       await new Promise((resolve, reject) => {
         response.data.on('data', (chunk) => {
           downloadedBytes += chunk.length;
+          if (onProgress && totalExpected > 0) {
+            const percent = Math.min(100, (downloadedBytes / totalExpected) * 100);
+            const elapsedSec = (Date.now() - startTime) / 1000;
+            const speedBytes = elapsedSec > 0 ? downloadedBytes / elapsedSec : 0;
+            const speed = speedBytes > 1024 * 1024
+              ? `${(speedBytes / (1024 * 1024)).toFixed(2)}MiB/s`
+              : `${(speedBytes / 1024).toFixed(1)}KiB/s`;
+            const remBytes = Math.max(0, totalExpected - downloadedBytes);
+            const etaSec = speedBytes > 0 ? Math.round(remBytes / speedBytes) : 0;
+            const eta = `${Math.floor(etaSec / 60)}:${String(etaSec % 60).padStart(2, '0')}`;
+            onProgress({ percent, speed, eta });
+          }
           if (downloadedBytes > maxSize) {
             response.data.destroy();
             writer.destroy();

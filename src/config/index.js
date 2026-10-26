@@ -22,6 +22,12 @@ module.exports = {
   },
   queue: {
     concurrency: parseInt(process.env.DOWNLOAD_CONCURRENCY || '2', 10)
+  },
+  rateLimit: {
+    enabled: process.env.RATE_LIMIT_ENABLED !== 'false',
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
+    maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '30', 10),
+    downloadMaxRequests: parseInt(process.env.DOWNLOAD_RATE_LIMIT_MAX || '5', 10)
   }
 };
 

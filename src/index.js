@@ -2,7 +2,7 @@ const { Telegraf } = require('telegraf');
 const { message } = require('telegraf/filters');
 const config = require('./config');
 const logger = require('./utils/logger');
-const { loggingMiddleware, errorHandler } = require('./middleware');
+const { loggingMiddleware, errorHandler, rateLimitMiddleware } = require('./middleware');
 const { markovLearningMiddleware, markovResponseHandler } = require('./middleware/markov.middleware');
 const { photoLearningMiddleware } = require('./middleware/photo.middleware');
 const { blacklistCheckMiddleware } = require('./middleware/blacklist.middleware');
@@ -55,6 +55,9 @@ bot.use(loggingMiddleware());
 
 // Blacklist check - must be before commands
 bot.use(blacklistCheckMiddleware());
+
+// Rate limit check - throttle spammers before heavy command handlers
+bot.use(rateLimitMiddleware());
 
 bot.use(markovLearningMiddleware);
 bot.use(photoLearningMiddleware);

@@ -1,10 +1,13 @@
-const fs = require('fs').promises;
+const Database = require('better-sqlite3');
+const fs = require('fs');
 const path = require('path');
 const logger = require('../utils/logger');
 
 class SettingsService {
   constructor() {
-    this.settingsFile = path.join(__dirname, '../../data/settings.json');
+    this.dbPath = path.join(__dirname, '../../data/settings.db');
+    this.legacyJsonPath = path.join(__dirname, '../../data/settings.json');
+    this.db = null;
     this.settings = new Map();
     this.defaultSettings = {
       videoDownload: true,
@@ -12,65 +15,88 @@ class SettingsService {
       memeGeneration: false,
       demotivatorsEnabled: false,
       blacklistEnabled: true,
-      // Add more toggleable features here in the future:
-      // tiktokSlideshow: true,
-      // autoDelete: false,
-      // etc.
     };
   }
 
   async init() {
     try {
-      // Ensure data directory exists
-      const dataDir = path.dirname(this.settingsFile);
-      await fs.mkdir(dataDir, { recursive: true });
-
-      // Load existing settings
-      try {
-        const data = await fs.readFile(this.settingsFile, 'utf8');
-        const settingsObj = JSON.parse(data);
-        this.settings = new Map(Object.entries(settingsObj));
-        logger.info(`Loaded settings for ${this.settings.size} chats`);
-      } catch (error) {
-        // File doesn't exist yet, start fresh
-        logger.info('No existing settings file, starting fresh');
+      const dataDir = path.dirname(this.dbPath);
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
       }
-    } catch (error) {
-      logger.error('Failed to initialize settings:', error);
-    }
-  }
 
-  async save() {
-    try {
-      const settingsObj = Object.fromEntries(this.settings);
-      await fs.writeFile(this.settingsFile, JSON.stringify(settingsObj, null, 2));
-      logger.debug('Settings saved successfully');
+      this.db = new Database(this.dbPath);
+      this.db.pragma('journal_mode = WAL');
+
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_settings (
+          chat_id TEXT PRIMARY KEY,
+          settings_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+
+      this.getStmt = this.db.prepare('SELECT settings_json FROM chat_settings WHERE chat_id = ?');
+      this.setStmt = this.db.prepare(`
+        INSERT INTO chat_settings (chat_id, settings_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(chat_id) DO UPDATE SET
+          settings_json = excluded.settings_json,
+          updated_at = excluded.updated_at
+      `);
+      this.getAllStmt = this.db.prepare('SELECT chat_id, settings_json FROM chat_settings');
+
+      // Migrate existing settings.json if database is currently empty
+      const count = this.db.prepare('SELECT COUNT(*) as count FROM chat_settings').get().count;
+      if (count === 0 && fs.existsSync(this.legacyJsonPath)) {
+        try {
+          const raw = fs.readFileSync(this.legacyJsonPath, 'utf8');
+          const legacyObj = JSON.parse(raw);
+          const insertMany = this.db.transaction((items) => {
+            const now = Date.now();
+            for (const [chatId, s] of Object.entries(items)) {
+              this.setStmt.run(String(chatId), JSON.stringify(s), now);
+            }
+          });
+          insertMany(legacyObj);
+          logger.info(`Migrated ${Object.keys(legacyObj).length} chat settings from JSON to SQLite`);
+        } catch (migErr) {
+          logger.error('Failed to migrate legacy settings.json to SQLite:', migErr);
+        }
+      }
+
+      // Populate in-memory map for fast synchronous access
+      const rows = this.getAllStmt.all();
+      for (const row of rows) {
+        try {
+          this.settings.set(row.chat_id, JSON.parse(row.settings_json));
+        } catch {}
+      }
+      logger.info(`Loaded settings for ${this.settings.size} chats from SQLite`);
     } catch (error) {
-      logger.error('Failed to save settings:', error);
+      logger.error('Failed to initialize settings SQLite database:', error);
     }
   }
 
   getSettings(chatId) {
     const key = String(chatId);
     if (!this.settings.has(key)) {
-      // Return default settings for new chats
       return { ...this.defaultSettings };
     }
-    // Merge with defaults to add any new features
     return { ...this.defaultSettings, ...this.settings.get(key) };
   }
 
   async toggleFeature(chatId, featureName) {
     const key = String(chatId);
     const current = this.getSettings(chatId);
-    
+
     if (!(featureName in current)) {
       throw new Error(`Unknown feature: ${featureName}`);
     }
 
     current[featureName] = !current[featureName];
     this.settings.set(key, current);
-    await this.save();
+    this.saveChat(key, current);
 
     logger.info(`Chat ${chatId}: ${featureName} = ${current[featureName]}`);
     return current[featureName];
@@ -79,25 +105,33 @@ class SettingsService {
   async setFeature(chatId, featureName, value) {
     const key = String(chatId);
     const current = this.getSettings(chatId);
-    
+
     if (!(featureName in current)) {
       throw new Error(`Unknown feature: ${featureName}`);
     }
 
     current[featureName] = Boolean(value);
     this.settings.set(key, current);
-    await this.save();
+    this.saveChat(key, current);
 
     logger.info(`Chat ${chatId}: ${featureName} = ${current[featureName]}`);
     return current[featureName];
   }
 
-  isFeatureEnabled(chatId, featureName) {
-    const settings = this.getSettings(chatId);
-    return settings[featureName] !== false; // Default to true if not set
+  saveChat(key, settingsObj) {
+    if (!this.db || !this.setStmt) return;
+    try {
+      this.setStmt.run(key, JSON.stringify(settingsObj), Date.now());
+    } catch (err) {
+      logger.error(`Failed to persist settings for chat ${key}:`, err);
+    }
   }
 
-  // Get human-readable feature names and descriptions
+  isFeatureEnabled(chatId, featureName) {
+    const settings = this.getSettings(chatId);
+    return settings[featureName] !== false;
+  }
+
   getFeatureInfo() {
     return {
       videoDownload: {
@@ -119,12 +153,7 @@ class SettingsService {
       blacklistEnabled: {
         name: '🚫 Blacklist System',
         description: 'Block specific users from using bot commands (admin only)'
-      },
-      // Add more features here as you build them:
-      // tiktokSlideshow: {
-      //   name: '📸 TikTok Slideshows',
-      //   description: 'Download TikTok photo slideshows'
-      // },
+      }
     };
   }
 }

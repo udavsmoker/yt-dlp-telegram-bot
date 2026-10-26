@@ -10,22 +10,7 @@ const queueService = require('../services/queue.service');
 const logger = require('../utils/logger');
 const { extractUrl, getUserInfo, cleanupFile, getFileForTelegram, isValidVideoUrl, isTikTokPhotoUrl, isTikTokUrl, isYouTubeUrl, isInstagramUrl, isInstagramPostUrl, getInstagramImgIndex, isBlueskyUrl, isBlueskyPostUrl, generateFilename, renderProgressBar } = require('../utils/helpers');
 
-const userRequests = new Map();
-const MAX_REQUESTS = 5;
-const WINDOW_MS = 60000;
-
-// Periodically clean up old rate limit entries (every 5 minutes)
-setInterval(() => {
-  const now = Date.now();
-  for (const [userId, requests] of userRequests.entries()) {
-    const recent = requests.filter(time => now - time < WINDOW_MS);
-    if (recent.length === 0) {
-      userRequests.delete(userId);
-    } else {
-      userRequests.set(userId, recent);
-    }
-  }
-}, 5 * 60 * 1000);
+const { downloadLimiter } = require('../middleware/rate-limit.middleware');
 
 const pendingYouTubeDownloads = new Map();
 const pendingInstagramDownloads = new Map();
@@ -430,17 +415,11 @@ async function handleDownload(ctx, next) {
   }
   
   if (userId) {
-    const now = Date.now();
-    const requests = userRequests.get(userId) || [];
-    const recentRequests = requests.filter(time => now - time < WINDOW_MS);
-    
-    if (recentRequests.length >= MAX_REQUESTS) {
+    const rateLimit = downloadLimiter.check(String(userId));
+    if (rateLimit.limited) {
       await ctx.reply('⏱ Please wait a moment before making another request.');
       return;
     }
-    
-    recentRequests.push(now);
-    userRequests.set(userId, recentRequests);
   }
   
   logger.info(`Download request from ${userInfo}: ${url}`);
@@ -957,17 +936,13 @@ async function handleYouTubeCallback(ctx) {
   }
   
   // Apply rate limiting
-  const now = Date.now();
-  const requests = userRequests.get(userId) || [];
-  const recentRequests = requests.filter(time => now - time < WINDOW_MS);
-  
-  if (recentRequests.length >= MAX_REQUESTS) {
-    await ctx.reply('⏱ Please wait a moment before making another request.');
-    return;
+  if (userId) {
+    const rateLimit = downloadLimiter.check(String(userId));
+    if (rateLimit.limited) {
+      await ctx.reply('⏱ Please wait a moment before making another request.');
+      return;
+    }
   }
-  
-  recentRequests.push(now);
-  userRequests.set(userId, recentRequests);
   
   const userInfo = getUserInfo(ctx);
   const url = pendingDownload.url;
@@ -1042,17 +1017,13 @@ async function handleInstagramCallback(ctx) {
   logger.info(`Instagram carousel ${callbackData === 'insta_single' ? `photo #${imgIndex}` : 'all'} download confirmed by ${userInfo}`);
   
   // Rate limiting
-  const now = Date.now();
-  const requests = userRequests.get(userId) || [];
-  const recentRequests = requests.filter(time => now - time < WINDOW_MS);
-  
-  if (recentRequests.length >= MAX_REQUESTS) {
-    await ctx.reply('⏱ Please wait a moment before making another request.');
-    return;
+  if (userId) {
+    const rateLimit = downloadLimiter.check(String(userId));
+    if (rateLimit.limited) {
+      await ctx.reply('⏱ Please wait a moment before making another request.');
+      return;
+    }
   }
-  
-  recentRequests.push(now);
-  userRequests.set(userId, recentRequests);
   
   const statusMessage = await ctx.reply('⏳ Processing your request...');
   

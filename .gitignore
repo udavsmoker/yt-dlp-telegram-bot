@@ -70,3 +70,7 @@ local-domains.json
 
 # Bot token folders (local API server data)
 [0-9]*:*/
+
+# AI Agent context and rules
+.agents/
+

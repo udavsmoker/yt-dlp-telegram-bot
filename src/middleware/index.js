@@ -42,7 +42,12 @@ function errorHandler() {
   };
 }
 
+const { rateLimitMiddleware, downloadLimiter, globalLimiter } = require('./rate-limit.middleware');
+
 module.exports = {
   loggingMiddleware,
-  errorHandler
+  errorHandler,
+  rateLimitMiddleware,
+  downloadLimiter,
+  globalLimiter
 };

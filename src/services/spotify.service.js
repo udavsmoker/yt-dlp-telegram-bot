@@ -67,33 +67,49 @@ class SpotifyService {
     const embedUrl = `https://open.spotify.com/embed/${type}/${id}`;
     logger.info(`Fetching Spotify embed: ${embedUrl}`);
 
-    const res = await axios.get(embedUrl, {
-      httpsAgent: ipv4Agent,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9'
-      },
-      timeout: 15000
-    });
+    let lastError = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await axios.get(embedUrl, {
+          httpsAgent: ipv4Agent,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
+          },
+          timeout: 15000
+        });
 
-    const match = res.data.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-    if (!match) {
-      throw new Error(`Failed to extract Spotify metadata from embed page for ${type}/${id}`);
-    }
+        const match = res.data.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+        if (!match) {
+          throw new Error(`Failed to extract Spotify metadata from embed page for ${type}/${id}`);
+        }
 
-    const json = JSON.parse(match[1]);
-    const entity = json?.props?.pageProps?.state?.data?.entity;
+        const json = JSON.parse(match[1]);
+        const entity = json?.props?.pageProps?.state?.data?.entity;
 
-    if (!entity) {
-      const status = json?.props?.pageProps?.status;
-      if (status === 404) {
-        throw new Error(`Spotify ${type} not found (ID: ${id})`);
+        if (!entity) {
+          const status = json?.props?.pageProps?.status;
+          if (status === 404) {
+            throw new Error(`Spotify ${type} not found (ID: ${id})`);
+          }
+          throw new Error(`Invalid Spotify metadata structure for ${type}/${id}`);
+        }
+
+        return entity;
+      } catch (err) {
+        lastError = err;
+        if (err.message.includes('not found')) {
+          throw err;
+        }
+        if (attempt < 3) {
+          logger.warn(`Spotify fetch embed attempt ${attempt} failed: ${err.message}. Retrying in ${attempt * 500}ms...`);
+          await new Promise(r => setTimeout(r, attempt * 500));
+        }
       }
-      throw new Error(`Invalid Spotify metadata structure for ${type}/${id}`);
     }
 
-    return entity;
+    throw lastError;
   }
 
   /**

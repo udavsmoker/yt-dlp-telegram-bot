@@ -158,4 +158,53 @@ describe('Spotify Service & Strategy', () => {
       assert.equal(tracks[1].coverUrl, null);
     });
   });
+
+  describe('YouTube candidate ranking & matching', () => {
+    const spotifyAudioService = require('../src/services/spotify-audio.service');
+
+    it('should prioritize Topic channel and exact duration match over covers and wrong tracks', () => {
+      const track = {
+        title: 'Больше не Друзья',
+        artist: 'Птицу ЕМЪ',
+        durationMs: 257931 // 258s
+      };
+
+      const candidates = [
+        { id: 'wrong_reupload', title: 'Птицу емъ-Больше не друзья норм версия', uploader: 'diana veseliskaia', duration: 244 },
+        { id: 'exact_topic', title: 'Больше не Друзья', uploader: 'Птицу ЕМЪ - Topic', duration: 258 },
+        { id: 'wrong_track_topic', title: 'Биохазард', uploader: 'Птицу ЕМЪ - Topic', duration: 257 },
+        { id: 'live_concert', title: 'Больше не Друзья (Live)', uploader: 'Fan', duration: 393 }
+      ];
+
+      const scored = candidates.map(c => ({
+        ...c,
+        score: spotifyAudioService.scoreCandidate(c, track)
+      })).sort((a, b) => b.score - a.score);
+
+      assert.equal(scored[0].id, 'exact_topic');
+      assert.ok(scored[0].score > scored[1].score);
+      assert.ok(scored.find(c => c.id === 'live_concert').score < 0);
+    });
+
+    it('should correctly select matching indie tracks without Official Audio', () => {
+      const track = {
+        title: '160ξσ44lone_shadow',
+        artist: 'mamomo',
+        durationMs: 246144 // 246s
+      };
+
+      const candidates = [
+        { id: 'exact_indie', title: '160ξσ44lone_shadow', uploader: 'mamomo - Topic', duration: 246 },
+        { id: 'other_song', title: 'mamomo - 84ζψ44the_vastnesses_of', uploader: 'mamomo', duration: 312 },
+        { id: 'random_kpop', title: 'FISCH - ASTRAEUS SERENADE', uploader: 'Saya_wassalamualaikum', duration: 215 }
+      ];
+
+      const scored = candidates.map(c => ({
+        ...c,
+        score: spotifyAudioService.scoreCandidate(c, track)
+      })).sort((a, b) => b.score - a.score);
+
+      assert.equal(scored[0].id, 'exact_indie');
+    });
+  });
 });

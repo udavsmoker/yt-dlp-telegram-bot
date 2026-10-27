@@ -86,6 +86,16 @@ describe('Download Strategies & Telegram Sender', () => {
       assert.equal(info.caption, '<a href="tg://user?id=111">Alice Smith</a>');
     });
 
+    it('should prefer @username for user mention when available', () => {
+      const mockCtx = {
+        from: { id: 222, first_name: 'Bob', username: 'bob_builder' },
+        chat: { type: 'supergroup' }
+      };
+      const info = getSenderInfo(mockCtx);
+      assert.equal(info.name, 'Bob');
+      assert.equal(info.caption, '<a href="tg://user?id=222">@bob_builder</a>');
+    });
+
     it('should extract channel title for channel posts', () => {
       const mockCtx = {
         from: null,

@@ -7,15 +7,21 @@ const logger = require('../../../utils/logger');
  * @returns {{ name: string, caption: string }}
  */
 function getSenderInfo(ctx) {
+  const senderChat = ctx.senderChat || ctx.message?.sender_chat;
+  if (senderChat) {
+    const title = senderChat.title || 'Channel';
+    return { name: title, caption: title };
+  }
   if (ctx.chat?.type === 'channel') {
     const title = ctx.chat?.title || 'Channel';
     return { name: title, caption: title };
   }
   if (ctx.from) {
-    const name = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+    const fullName = ctx.from.first_name + (ctx.from.last_name ? ` ${ctx.from.last_name}` : '');
+    const userMention = ctx.from.username ? `@${ctx.from.username}` : fullName;
     return {
-      name,
-      caption: `<a href="tg://user?id=${ctx.from.id}">${name}</a>`
+      name: fullName,
+      caption: `<a href="tg://user?id=${ctx.from.id}">${userMention}</a>`
     };
   }
   const title = ctx.chat?.title || 'Channel';

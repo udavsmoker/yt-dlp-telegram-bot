@@ -6,6 +6,7 @@ const audioService = require('../../../services/audio.service');
 const logger = require('../../../utils/logger');
 const { cleanupFile, generateFilename, getFileForTelegram, getUserInfo } = require('../../../utils/helpers');
 const { getVideoLocalPath } = require('../common/local-storage');
+const { getSenderInfo } = require('../common/telegram-sender');
 
 const pendingAudioExtracts = new Map();
 
@@ -95,6 +96,13 @@ async function handleMp3Command(ctx) {
       duration: audioResult.duration || undefined,
       reply_to_message_id: replyMessage.message_id
     };
+
+    const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+    if (isGroup) {
+      const sender = getSenderInfo(ctx);
+      audioOptions.caption = `Sent by ${sender.caption}`;
+      audioOptions.parse_mode = 'HTML';
+    }
 
     if (thumbPath) {
       audioOptions.thumbnail = getFileForTelegram(thumbPath);
@@ -210,6 +218,13 @@ async function processAudioExtraction(ctx, videoFileId, userId, title, author, t
       performer: author || (audioResult.artist !== 'Unknown' ? audioResult.artist : undefined),
       duration: audioResult.duration || undefined
     };
+
+    const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+    if (isGroup) {
+      const sender = getSenderInfo(ctx);
+      audioOptions.caption = `Sent by ${sender.caption}`;
+      audioOptions.parse_mode = 'HTML';
+    }
 
     if (thumbPath) {
       audioOptions.thumbnail = getFileForTelegram(thumbPath);

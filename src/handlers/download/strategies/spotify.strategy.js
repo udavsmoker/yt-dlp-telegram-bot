@@ -5,6 +5,7 @@ const queueService = require('../../../services/queue.service');
 const undoService = require('../../../services/undo.service');
 const logger = require('../../../utils/logger');
 const { getFileForTelegram, renderProgressBar, getUserInfo, cleanupFile } = require('../../../utils/helpers');
+const { getSenderInfo } = require('../common/telegram-sender');
 const { downloadLimiter } = require('../../../middleware/rate-limit.middleware');
 
 class SpotifyStrategy extends BaseStrategy {
@@ -77,11 +78,18 @@ class SpotifyStrategy extends BaseStrategy {
             '📤 Uploading to Telegram...'
           );
 
+          const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
           const audioOpts = {
             title: result.title,
             performer: result.artist,
             duration: result.duration
           };
+
+          if (isGroup) {
+            const sender = getSenderInfo(ctx);
+            audioOpts.caption = `Sent by ${sender.caption}`;
+            audioOpts.parse_mode = 'HTML';
+          }
 
           if (result.thumbnailPath) {
             audioOpts.thumbnail = getFileForTelegram(result.thumbnailPath);
@@ -324,11 +332,18 @@ class SpotifyStrategy extends BaseStrategy {
             throw new Error('DOWNLOAD_CANCELLED');
           }
 
+          const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
           const audioOpts = {
             title: result.title,
             performer: result.artist,
             duration: result.duration
           };
+
+          if (isGroup) {
+            const sender = getSenderInfo(ctx);
+            audioOpts.caption = `Sent by ${sender.caption}`;
+            audioOpts.parse_mode = 'HTML';
+          }
 
           if (result.thumbnailPath) {
             audioOpts.thumbnail = getFileForTelegram(result.thumbnailPath);

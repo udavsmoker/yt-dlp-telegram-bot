@@ -117,5 +117,6 @@ module.exports = {
   handleYouTubeCallback,
   handleInstagramCallback,
   handleMp3Command,
-  handleAudioCallback
+  handleAudioCallback,
+  youtubeStrategy
 };

@@ -105,5 +105,38 @@ describe('QueueService & ProgressReporter', () => {
       // Should not have flushed Update 2 after stop()
       assert.equal(editedMessages.length, 1);
     });
+
+    it('should cancel and wait for in-flight edit before setting final cancelled message', async () => {
+      const editedMessages = [];
+      let resolveInFlight;
+      const inFlightPromise = new Promise(r => { resolveInFlight = r; });
+
+      const mockCtx = {
+        chat: { id: 123 },
+        telegram: {
+          editMessageText: async (_chatId, _msgId, _inline, text) => {
+            editedMessages.push(text);
+            if (text === 'In Flight Progress') {
+              await inFlightPromise;
+            }
+          }
+        }
+      };
+
+      const reporter = new ProgressReporter(mockCtx, 999, 100);
+      reporter.update('In Flight Progress');
+      assert.equal(editedMessages.length, 1);
+      assert.equal(editedMessages[0], 'In Flight Progress');
+
+      // Now cancel while edit is technically resolving
+      const cancelPromise = reporter.cancel('❌ Download cancelled.');
+
+      // Resolve in-flight HTTP edit
+      resolveInFlight();
+      await cancelPromise;
+
+      // The final message MUST be '❌ Download cancelled.'
+      assert.equal(editedMessages[editedMessages.length - 1], '❌ Download cancelled.');
+    });
   });
 });

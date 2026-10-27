@@ -441,12 +441,32 @@ function renderProgressBar(percent, speed, eta) {
 
   const lines = [`⬇️ Downloading: [${bar}] ${clamped}%`];
   if (speed && !['Unknown B/s', '---b/s', 'N/A', 'NA'].includes(speed.trim())) {
-    lines.push(`⚡ Speed: ${speed.trim()}`);
+    lines.push(`Speed: ${speed.trim()}`);
   }
   if (eta && !['Unknown', '--:--', 'NA', 'N/A'].includes(eta.trim())) {
     lines.push(`⏱ ETA: ${eta.trim()}`);
   }
   return lines.join('\n');
+}
+
+/**
+ * Check if the user is an administrator or creator of the chat.
+ * @param {object} ctx - Telegraf context
+ * @returns {Promise<boolean>}
+ */
+async function isAdmin(ctx) {
+  try {
+    const chatType = ctx.chat?.type;
+    if (chatType === 'private' || chatType === 'channel') {
+      return true;
+    }
+    const userId = ctx.from?.id;
+    if (!userId) return false;
+    const member = await ctx.getChatMember(userId);
+    return member.status === 'creator' || member.status === 'administrator';
+  } catch {
+    return false;
+  }
 }
 
 module.exports = {
@@ -470,6 +490,7 @@ module.exports = {
   formatFileSize,
   formatDuration,
   renderProgressBar,
+  isAdmin,
   startTempCleanup
 };
 

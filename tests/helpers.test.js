@@ -111,11 +111,11 @@ describe('Helpers & Utilities', () => {
       assert.ok(bar.includes('██████████'));
     });
 
-    it('should round percent and include speed and ETA when provided', () => {
+    it('should round percent and include speed and ETA', () => {
       const bar = renderProgressBar(45.5, '12.5MiB/s', '00:00:15');
       assert.ok(bar.includes('46%'));
-      assert.ok(bar.includes('12.5MiB/s'));
-      assert.ok(bar.includes('00:00:15'));
+      assert.ok(bar.includes('Speed: 12.5MiB/s'));
+      assert.ok(bar.includes('⏱ ETA: 00:00:15'));
     });
 
     it('should sanitize placeholder speed and ETA', () => {

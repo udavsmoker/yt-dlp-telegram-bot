@@ -43,6 +43,11 @@ class BaseStrategy {
    * @param {boolean} isPhotoPost
    */
   async sendErrorMessage(ctx, statusMessageId, error, userInfo, isPhotoPost = false) {
+    if (error?.message === 'DOWNLOAD_CANCELLED' || error?.name === 'AbortError') {
+      logger.info(`Download cancelled for ${userInfo}`);
+      return;
+    }
+
     logger.error(`Download failed for ${userInfo} via ${this.name}: ${error.message}`);
 
     let safeErrorMsg = error.message ? error.message.replace(/[_*[\]`~>#+\-=|{}.!()\\]/g, ' ').trim() : 'Unknown error';

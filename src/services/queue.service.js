@@ -11,6 +11,8 @@ class ProgressReporter {
     this.timer = null;
     this.pendingText = null;
     this.isEditing = false;
+    this.currentEditPromise = null;
+    this.stopped = false;
   }
 
   update(text) {
@@ -39,15 +41,17 @@ class ProgressReporter {
     this.isEditing = true;
 
     try {
-      await this.ctx.telegram.editMessageText(
+      this.currentEditPromise = this.ctx.telegram.editMessageText(
         this.ctx.chat.id,
         this.statusMessageId,
         null,
         textToSend
       );
+      await this.currentEditPromise;
     } catch {
       // Suppress rate limits or duplicate edit errors
     } finally {
+      this.currentEditPromise = null;
       this.isEditing = false;
       if (!this.stopped && this.pendingText && this.pendingText !== this.lastText && !this.timer) {
         this.timer = setTimeout(() => {
@@ -66,32 +70,62 @@ class ProgressReporter {
       this.timer = null;
     }
   }
+
+  /**
+   * Safely stop reporting and update message to cancelled text,
+   * waiting for any in-flight edit to complete first so it never overwrites the cancel text.
+   * @param {string} cancelledText
+   */
+  async cancel(cancelledText = '❌ Download cancelled.') {
+    this.stop();
+    if (this.currentEditPromise) {
+      try {
+        await this.currentEditPromise;
+      } catch {}
+    }
+    try {
+      await this.ctx.telegram.editMessageText(
+        this.ctx.chat.id,
+        this.statusMessageId,
+        null,
+        cancelledText
+      );
+      this.lastText = cancelledText;
+    } catch {}
+  }
 }
 
 class QueueService {
   constructor() {
     this.concurrency = config.queue?.concurrency || 2;
-    this.running = new Set();
+    this.running = new Map();
     this.waiting = [];
     this.nextJobId = 1;
   }
 
   /**
    * Enqueues an async download task, managing concurrency and queue status messages.
-   * @param {Function} taskFn - async () => result
-   * @param {object} meta - { ctx, statusMessageId }
+   * @param {Function} taskFn - async ({ signal }) => result
+   * @param {object} meta - { ctx, statusMessageId, originalMessageId }
    * @returns {Promise<any>}
    */
   enqueue(taskFn, meta = {}) {
     return new Promise((resolve, reject) => {
+      const abortController = new AbortController();
       const job = {
         id: this.nextJobId++,
         taskFn,
         ctx: meta.ctx,
         statusMessageId: meta.statusMessageId,
+        originalMessageId: meta.originalMessageId,
+        chatId: meta.ctx?.chat?.id,
+        userId: meta.ctx?.from?.id,
+        abortController,
+        signal: abortController.signal,
         resolve,
         reject,
-        enqueuedAt: Date.now()
+        enqueuedAt: Date.now(),
+        isCancelled: false
       };
 
       if (this.running.size < this.concurrency) {
@@ -104,11 +138,16 @@ class QueueService {
   }
 
   async runJob(job) {
-    this.running.add(job.id);
+    if (job.isCancelled) {
+      job.reject(new Error('DOWNLOAD_CANCELLED'));
+      return;
+    }
+
+    this.running.set(job.id, job);
     logger.info(`Starting download job #${job.id} (active: ${this.running.size}/${this.concurrency}, queued: ${this.waiting.length})`);
 
     try {
-      const result = await job.taskFn();
+      const result = await job.taskFn({ signal: job.signal });
       job.resolve(result);
     } catch (error) {
       job.reject(error);
@@ -157,8 +196,75 @@ class QueueService {
     }
   }
 
+  /**
+   * Cancel an in-flight or queued download job for a chat/user.
+   * @param {string|number} chatId
+   * @param {number|null} targetStatusMessageId
+   * @param {number|null} userId
+   * @param {boolean} isChatAdmin
+   * @returns {{ job: object, stage: 'waiting'|'running' } | { unauthorized: true } | null}
+   */
+  cancelJob(chatId, targetStatusMessageId = null, userId = null, isChatAdmin = false) {
+    const parsedTargetId = targetStatusMessageId ? Number(targetStatusMessageId) : null;
+    const parsedUserId = userId ? Number(userId) : null;
+    const keyChatId = Number(chatId);
+
+    // 1. Check waiting queue first (newest to oldest or matching target)
+    for (let i = this.waiting.length - 1; i >= 0; i--) {
+      const job = this.waiting[i];
+      if (Number(job.chatId) !== keyChatId) continue;
+      if (parsedTargetId && job.statusMessageId !== parsedTargetId) continue;
+
+      const isOwner = parsedUserId && job.userId === parsedUserId;
+      if (!isChatAdmin && !isOwner && job.userId) {
+        return { unauthorized: true };
+      }
+
+      this.waiting.splice(i, 1);
+      job.isCancelled = true;
+      job.abortController.abort();
+      job.reject(new Error('DOWNLOAD_CANCELLED'));
+      this.updateRemainingPositions();
+      return { job, stage: 'waiting' };
+    }
+
+    // 2. Check running jobs
+    for (const job of Array.from(this.running.values()).reverse()) {
+      if (Number(job.chatId) !== keyChatId) continue;
+      if (parsedTargetId && job.statusMessageId !== parsedTargetId) continue;
+
+      const isOwner = parsedUserId && job.userId === parsedUserId;
+      if (!isChatAdmin && !isOwner && job.userId) {
+        return { unauthorized: true };
+      }
+
+      job.isCancelled = true;
+      if (job.progressReporter) {
+        job.progressReporter.stop();
+      }
+      job.abortController.abort();
+      return { job, stage: 'running' };
+    }
+
+    return null;
+  }
+
   createProgressReporter(ctx, statusMessageId) {
-    return new ProgressReporter(ctx, statusMessageId);
+    const reporter = new ProgressReporter(ctx, statusMessageId);
+    const parsedId = Number(statusMessageId);
+    for (const job of this.running.values()) {
+      if (job.statusMessageId === parsedId) {
+        job.progressReporter = reporter;
+        break;
+      }
+    }
+    for (const job of this.waiting) {
+      if (job.statusMessageId === parsedId) {
+        job.progressReporter = reporter;
+        break;
+      }
+    }
+    return reporter;
   }
 
   getStats() {

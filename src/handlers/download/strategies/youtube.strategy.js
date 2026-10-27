@@ -52,7 +52,8 @@ class YouTubeStrategy extends BaseStrategy {
     this.pendingYouTubeDownloads.set(confirmMessage.message_id, {
       userId: ctx.from?.id,
       url,
-      originalMessageId
+      originalMessageId,
+      chatId: ctx.chat.id
     });
 
     setTimeout(() => {
@@ -61,6 +62,34 @@ class YouTubeStrategy extends BaseStrategy {
         ctx.telegram.deleteMessage(ctx.chat.id, confirmMessage.message_id).catch(() => {});
       }
     }, 60000);
+  }
+
+  /**
+   * Cancel pending YouTube quality selection prompt.
+   * @param {string|number} chatId
+   * @param {number|null} targetMessageId
+   * @param {number|null} userId
+   * @param {boolean} isChatAdmin
+   * @returns {{ messageId: number, pending: object } | { unauthorized: true } | null}
+   */
+  cancelPending(chatId, targetMessageId = null, userId = null, isChatAdmin = false) {
+    const keyChatId = Number(chatId);
+    const parsedTargetId = targetMessageId ? Number(targetMessageId) : null;
+    const parsedUserId = userId ? Number(userId) : null;
+
+    for (const [msgId, pending] of Array.from(this.pendingYouTubeDownloads.entries()).reverse()) {
+      if (pending.chatId && Number(pending.chatId) !== keyChatId) continue;
+      if (parsedTargetId && msgId !== parsedTargetId) continue;
+
+      const isOwner = parsedUserId && pending.userId === parsedUserId;
+      if (!isChatAdmin && !isOwner && pending.userId) {
+        return { unauthorized: true };
+      }
+
+      this.pendingYouTubeDownloads.delete(msgId);
+      return { messageId: msgId, pending };
+    }
+    return null;
   }
 
   /**
@@ -296,6 +325,11 @@ class YouTubeStrategy extends BaseStrategy {
             audioOptions
           );
 
+          if (sentAudio && ctx.chat?.id) {
+            const undoService = require('../../../services/undo.service');
+            undoService.record(ctx.chat.id, [sentAudio.message_id], ctx.from?.id);
+          }
+
           cacheSentMedia(url, [sentAudio], result.info, result);
 
           await cleanupFile(audioResult.audioPath);
@@ -306,6 +340,10 @@ class YouTubeStrategy extends BaseStrategy {
         }
       }, { ctx, statusMessageId: statusMessage.message_id });
     } catch (error) {
+      if (error?.message === 'DOWNLOAD_CANCELLED' || error?.name === 'AbortError') {
+        logger.info(`YouTube audio download cancelled for ${userInfo}`);
+        return;
+      }
       logger.error(`YouTube audio download failed for ${userInfo}: ${error.message}`);
       await ctx.telegram.editMessageText(
         ctx.chat.id,

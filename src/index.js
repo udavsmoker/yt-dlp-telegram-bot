@@ -15,6 +15,9 @@ const { handleDemotivate, handlePhotoStats } = require('./handlers/demotivator.h
 const { handleSettings, handleSettingsCallback } = require('./handlers/settings.handler');
 const { handleSetLaziness, handleSetCoherence, handleSetSassiness, handleBotStats } = require('./handlers/markov.handler');
 const { handleBlacklist } = require('./handlers/blacklist.handler');
+const { handleHealth } = require('./handlers/health.handler');
+const handleUndo = require('./handlers/undo.handler');
+const handleCancel = require('./handlers/cancel.handler');
 const settingsService = require('./services/settings.service');
 const memeService = require('./services/meme.service');
 const demotivatorService = require('./services/demotivator.service');
@@ -80,6 +83,10 @@ bot.command('botstats', handleBotStats);
 
 bot.command('blacklist', handleBlacklist);
 bot.command('mp3', handleMp3Command);
+bot.command('health', handleHealth);
+bot.command('ping', handleHealth);
+bot.command('undo', handleUndo);
+bot.command('cancel', handleCancel);
 
 bot.action(/^toggle_/, handleSettingsCallback);
 bot.action('settings_close', handleSettingsCallback);

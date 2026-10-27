@@ -199,6 +199,10 @@ class VideoService {
             logger.info('Using TikTok API hostname workaround');
           }
 
+          if (options.signal?.aborted) {
+            throw new Error('DOWNLOAD_CANCELLED');
+          }
+
           let downloadOutput;
           try {
             const execOptions = {
@@ -208,7 +212,7 @@ class VideoService {
               progressTemplate: 'download:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s'
             };
 
-            const proc = youtubedl.exec(url, execOptions);
+            const proc = youtubedl.exec(url, execOptions, options.signal ? { signal: options.signal } : {});
 
             if (onProgress && proc.stdout) {
               const handleChunk = (chunk) => {
@@ -246,6 +250,10 @@ class VideoService {
               logger.debug(`yt-dlp output for ${strategy.name}: ${JSON.stringify(downloadOutput).substring(0, 200)}`);
             }
           } catch (ytdlpError) {
+            if (options.signal?.aborted || ytdlpError.name === 'AbortError' || ytdlpError.code === 'ERR_ABORTED') {
+              throw new Error('DOWNLOAD_CANCELLED');
+            }
+
             // Log yt-dlp errors but continue to next strategy
             const errorMsg = ytdlpError.message || '';
             const stderr = ytdlpError.stderr || '';

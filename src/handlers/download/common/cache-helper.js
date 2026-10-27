@@ -61,6 +61,8 @@ async function tryServeFromCache(ctx, url, statusMessageId, originalMessageId, u
     }
 
     if (sentMsg) {
+      const undoService = require('../../../services/undo.service');
+      undoService.record(ctx.chat.id, [sentMsg.message_id], ctx.from?.id);
       await cleanupMessages(ctx, statusMessageId, originalMessageId);
       logger.info(`Served ${url} from cache to ${userInfo}`);
       return true;

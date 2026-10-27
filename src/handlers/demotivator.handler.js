@@ -39,7 +39,11 @@ async function handleDemotivate(ctx) {
 
     await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
 
-    await ctx.replyWithPhoto(getFileForTelegram(resultPath));
+    const sentPhoto = await ctx.replyWithPhoto(getFileForTelegram(resultPath));
+    if (sentPhoto && ctx.chat?.id) {
+      const undoService = require('../services/undo.service');
+      undoService.record(ctx.chat.id, [sentPhoto.message_id], ctx.from?.id);
+    }
 
     logger.info('Demotivator sent successfully');
   } catch (error) {

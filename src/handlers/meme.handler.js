@@ -63,12 +63,17 @@ async function handleMeme(ctx) {
       '📤 Uploading meme...'
     );
 
-    await ctx.replyWithPhoto(
+    const sentPhoto = await ctx.replyWithPhoto(
       getFileForTelegram(result.filePath),
       {
         caption: `Template: ${result.templateName}`
       }
     );
+
+    if (sentPhoto && ctx.chat?.id) {
+      const undoService = require('../services/undo.service');
+      undoService.record(ctx.chat.id, [sentPhoto.message_id], ctx.from?.id);
+    }
 
     await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
 

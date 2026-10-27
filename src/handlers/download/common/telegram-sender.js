@@ -129,6 +129,11 @@ async function sendMediaToTelegram(ctx, mediaItems, caption, videoMeta = {}) {
     logger.info(`Sent batch ${batchIndex + 1}/${batches.length} (${batch.length} item(s))`);
   }
 
+  if (sentMessages.length > 0 && ctx.chat?.id) {
+    const undoService = require('../../../services/undo.service');
+    undoService.record(ctx.chat.id, sentMessages.map(m => m.message_id), ctx.from?.id);
+  }
+
   return sentMessages;
 }
 

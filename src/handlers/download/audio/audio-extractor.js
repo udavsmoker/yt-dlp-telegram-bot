@@ -100,10 +100,15 @@ async function handleMp3Command(ctx) {
       audioOptions.thumbnail = getFileForTelegram(thumbPath);
     }
 
-    await ctx.replyWithAudio(
+    const sentAudio = await ctx.replyWithAudio(
       getFileForTelegram(audioResult.audioPath),
       audioOptions
     );
+
+    if (sentAudio && ctx.chat?.id) {
+      const undoService = require('../../../services/undo.service');
+      undoService.record(ctx.chat.id, [sentAudio.message_id], ctx.from?.id);
+    }
 
     await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
     logger.info(`MP3 sent successfully to ${userInfo}`);
@@ -210,10 +215,15 @@ async function processAudioExtraction(ctx, videoFileId, userId, title, author, t
       audioOptions.thumbnail = getFileForTelegram(thumbPath);
     }
 
-    await ctx.replyWithAudio(
+    const sentAudio = await ctx.replyWithAudio(
       getFileForTelegram(audioResult.audioPath),
       audioOptions
     );
+
+    if (sentAudio && ctx.chat?.id) {
+      const undoService = require('../../../services/undo.service');
+      undoService.record(ctx.chat.id, [sentAudio.message_id], ctx.from?.id);
+    }
 
     await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
     logger.info(`Audio extracted and sent successfully to ${userInfo}`);

@@ -13,6 +13,9 @@ async function handleHelp(ctx) {
 /start - welcome message
 /help - this message
 /about - technical details
+/health - system diagnostics & status
+/cancel - cancel active or queued download
+/undo - delete last sent media (or reply to it)
 /mp3 - extract audio from a replied video
 /settings - chat settings (Admins)
 /botstats - view AI stats

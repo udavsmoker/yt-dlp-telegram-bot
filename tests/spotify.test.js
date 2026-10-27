@@ -157,6 +157,49 @@ describe('Spotify Service & Strategy', () => {
       assert.equal(tracks[0].playlistCoverUrl, 'https://cdn.spotify.com/playlist_cover.jpg');
       assert.equal(tracks[1].coverUrl, null);
     });
+
+    it('should manage active playlist cancellation permissions via cancelActive', () => {
+      const strategy = new SpotifyStrategy();
+      const statusMessageId = 777;
+      const ownerId = 12345;
+      const otherUserId = 67890;
+      const adminId = 99999;
+      const chatId = -1003;
+      const abortController = new AbortController();
+
+      strategy.activePlaylists.set(statusMessageId, {
+        abortController,
+        chatId,
+        userId: ownerId,
+        statusMessageId,
+        originalMessageId: 111
+      });
+
+      // Non-owner cannot cancel
+      const unauthorized = strategy.cancelActive(chatId, statusMessageId, otherUserId, false);
+      assert.deepEqual(unauthorized, { unauthorized: true });
+      assert.equal(abortController.signal.aborted, false);
+      assert.equal(strategy.activePlaylists.has(statusMessageId), true);
+
+      // Owner can cancel
+      const ownerCancel = strategy.cancelActive(chatId, statusMessageId, ownerId, false);
+      assert.equal(ownerCancel.statusMessageId, statusMessageId);
+      assert.equal(abortController.signal.aborted, true);
+      assert.equal(strategy.activePlaylists.has(statusMessageId), false);
+
+      // Admin can cancel
+      const adminController = new AbortController();
+      strategy.activePlaylists.set(888, {
+        abortController: adminController,
+        chatId,
+        userId: ownerId,
+        statusMessageId: 888
+      });
+      const adminCancel = strategy.cancelActive(chatId, 888, adminId, true);
+      assert.equal(adminCancel.statusMessageId, 888);
+      assert.equal(adminController.signal.aborted, true);
+      assert.equal(strategy.activePlaylists.has(888), false);
+    });
   });
 
   describe('YouTube candidate ranking & matching', () => {

@@ -12,6 +12,7 @@ class SpotifyStrategy extends BaseStrategy {
   constructor() {
     super('Spotify');
     this.pendingSpotifyPrompts = new Map();
+    this.activePlaylists = new Map();
   }
 
   canHandle(url) {
@@ -32,9 +33,12 @@ class SpotifyStrategy extends BaseStrategy {
       return ctx.reply('⚠️ Invalid or unsupported Spotify URL.');
     }
 
-    // Single track download
+    // Single track download (dispatch asynchronously in background)
     if (parsed.type === 'track') {
-      return this.handleTrack(ctx, parsed.id, url, userInfo, originalMessageId);
+      this.handleTrack(ctx, parsed.id, url, userInfo, originalMessageId).catch(error => {
+        logger.error(`Spotify track error for ${userInfo}:`, error);
+      });
+      return;
     }
 
     // Playlist or Album download
@@ -244,12 +248,23 @@ class SpotifyStrategy extends BaseStrategy {
 
   /**
    * Sequential playlist download pipeline with paced Telegram delivery, individual track cover art,
-   * and immediate /cancel signal aborting.
+   * per-track queue scheduling, and immediate /cancel signal aborting.
    */
   async processPlaylistDownload(ctx, entity, userInfo, statusMessageId, originalMessageId) {
     const total = entity.tracks.length;
     let completedCount = 0;
     let failedCount = 0;
+
+    const playlistAbortController = new AbortController();
+    const playlistSignal = playlistAbortController.signal;
+
+    this.activePlaylists.set(statusMessageId, {
+      abortController: playlistAbortController,
+      chatId: ctx.chat.id,
+      userId: ctx.from?.id,
+      statusMessageId,
+      originalMessageId
+    });
 
     const sleepWithSignal = (ms, signal) => {
       if (signal?.aborted) return Promise.reject(new Error('DOWNLOAD_CANCELLED'));
@@ -267,11 +282,11 @@ class SpotifyStrategy extends BaseStrategy {
       });
     };
 
-    await queueService.enqueue(async ({ signal } = {}) => {
-      logger.info(`Starting batch download of Spotify playlist "${entity.title}" (${total} tracks) for ${userInfo}`);
+    logger.info(`Starting batch download of Spotify playlist "${entity.title}" (${total} tracks) for ${userInfo}`);
 
+    try {
       for (let i = 0; i < total; i++) {
-        if (signal?.aborted) {
+        if (playlistSignal.aborted) {
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
@@ -279,7 +294,7 @@ class SpotifyStrategy extends BaseStrategy {
         const percent = Math.round(((i + 1) / total) * 100);
 
         // 1. Update playlist progress card (skip if cancelled)
-        if (!signal?.aborted) {
+        if (!playlistSignal.aborted) {
           try {
             await ctx.telegram.editMessageText(
               ctx.chat.id,
@@ -298,117 +313,138 @@ class SpotifyStrategy extends BaseStrategy {
         }
 
         try {
-          if (signal?.aborted) {
+          if (playlistSignal.aborted) {
             throw new Error('DOWNLOAD_CANCELLED');
           }
 
-          // 2. Fetch individual track album cover art on demand (playlist embed only has playlist cover)
-          if (!track.coverUrl && track.id && !track.id.startsWith('track_')) {
+          // Enqueue each track individually so queue slots are shared cooperatively across users
+          await queueService.enqueue(async ({ signal: queueSignal } = {}) => {
+            const combinedAbort = new AbortController();
+            const onPlaylistAbort = () => combinedAbort.abort();
+            const onQueueAbort = () => combinedAbort.abort();
+
+            playlistSignal.addEventListener('abort', onPlaylistAbort, { once: true });
+            queueSignal?.addEventListener('abort', onQueueAbort, { once: true });
+
+            const signal = combinedAbort.signal;
+
             try {
-              const trackMeta = await spotifyService.getTrack(track.id);
-              if (trackMeta) {
-                if (trackMeta.coverUrl) track.coverUrl = trackMeta.coverUrl;
-                if (trackMeta.album) track.album = trackMeta.album;
-                if (trackMeta.releaseDate) track.releaseDate = trackMeta.releaseDate;
+              if (signal.aborted) {
+                throw new Error('DOWNLOAD_CANCELLED');
               }
-            } catch (metaErr) {
-              logger.warn(`Could not fetch individual cover for "${track.title}": ${metaErr.message}`);
-            }
-          }
-          // Fallback to playlist cover if individual cover art was not found
-          if (!track.coverUrl && track.playlistCoverUrl) {
-            track.coverUrl = track.playlistCoverUrl;
-          }
 
-          if (signal?.aborted) {
-            throw new Error('DOWNLOAD_CANCELLED');
-          }
+              // 2. Fetch individual track album cover art on demand (playlist embed only has playlist cover)
+              if (!track.coverUrl && track.id && !track.id.startsWith('track_')) {
+                try {
+                  const trackMeta = await spotifyService.getTrack(track.id);
+                  if (trackMeta) {
+                    if (trackMeta.coverUrl) track.coverUrl = trackMeta.coverUrl;
+                    if (trackMeta.album) track.album = trackMeta.album;
+                    if (trackMeta.releaseDate) track.releaseDate = trackMeta.releaseDate;
+                  }
+                } catch (metaErr) {
+                  logger.warn(`Could not fetch individual cover for "${track.title}": ${metaErr.message}`);
+                }
+              }
+              // Fallback to playlist cover if individual cover art was not found
+              if (!track.coverUrl && track.playlistCoverUrl) {
+                track.coverUrl = track.playlistCoverUrl;
+              }
 
-          // 3. Download and transcode track
-          const result = await spotifyAudioService.downloadAndTagTrack(track, { signal });
+              if (signal.aborted) {
+                throw new Error('DOWNLOAD_CANCELLED');
+              }
 
-          if (signal?.aborted) {
-            await result.cleanup();
-            throw new Error('DOWNLOAD_CANCELLED');
-          }
+              // 3. Download and transcode track
+              const result = await spotifyAudioService.downloadAndTagTrack(track, { signal });
 
-          const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
-          const audioOpts = {
-            title: result.title,
-            performer: result.artist,
-            duration: result.duration
-          };
-
-          if (isGroup) {
-            const sender = getSenderInfo(ctx);
-            audioOpts.caption = `Sent by ${sender.caption}`;
-            audioOpts.parse_mode = 'HTML';
-          }
-
-          if (result.thumbnailPath) {
-            audioOpts.thumbnail = getFileForTelegram(result.thumbnailPath);
-          }
-
-          // 4. Send to Telegram using abort-aware callApi with 429 flood protection retry
-          let sent = null;
-          let retries = 3;
-          while (retries > 0 && !sent) {
-            if (signal?.aborted) {
-              await result.cleanup();
-              throw new Error('DOWNLOAD_CANCELLED');
-            }
-
-            try {
-              sent = await ctx.telegram.callApi('sendAudio', {
-                chat_id: ctx.chat.id,
-                audio: getFileForTelegram(result.audioPath),
-                ...audioOpts
-              }, signal ? { signal } : {});
-            } catch (sendErr) {
-              if (signal?.aborted || sendErr.name === 'AbortError' || sendErr.code === 'ERR_ABORTED') {
+              if (signal.aborted) {
                 await result.cleanup();
                 throw new Error('DOWNLOAD_CANCELLED');
               }
-              if (sendErr.parameters?.retry_after) {
-                const waitSec = sendErr.parameters.retry_after + 1;
-                logger.warn(`Telegram flood limit hit during playlist! Waiting ${waitSec}s`);
-                await sleepWithSignal(waitSec * 1000, signal);
-                retries--;
-              } else {
-                throw sendErr;
+
+              const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+              const audioOpts = {
+                title: result.title,
+                performer: result.artist,
+                duration: result.duration
+              };
+
+              if (isGroup) {
+                const sender = getSenderInfo(ctx);
+                audioOpts.caption = `Sent by ${sender.caption}`;
+                audioOpts.parse_mode = 'HTML';
               }
+
+              if (result.thumbnailPath) {
+                audioOpts.thumbnail = getFileForTelegram(result.thumbnailPath);
+              }
+
+              // 4. Send to Telegram using abort-aware callApi with 429 flood protection retry
+              let sent = null;
+              let retries = 3;
+              while (retries > 0 && !sent) {
+                if (signal.aborted) {
+                  await result.cleanup();
+                  throw new Error('DOWNLOAD_CANCELLED');
+                }
+
+                try {
+                  sent = await ctx.telegram.callApi('sendAudio', {
+                    chat_id: ctx.chat.id,
+                    audio: getFileForTelegram(result.audioPath),
+                    ...audioOpts
+                  }, signal ? { signal } : {});
+                } catch (sendErr) {
+                  if (signal.aborted || sendErr.name === 'AbortError' || sendErr.code === 'ERR_ABORTED') {
+                    await result.cleanup();
+                    throw new Error('DOWNLOAD_CANCELLED');
+                  }
+                  if (sendErr.parameters?.retry_after) {
+                    const waitSec = sendErr.parameters.retry_after + 1;
+                    logger.warn(`Telegram flood limit hit during playlist! Waiting ${waitSec}s`);
+                    await sleepWithSignal(waitSec * 1000, signal);
+                    retries--;
+                  } else {
+                    throw sendErr;
+                  }
+                }
+              }
+
+              // If cancelled while uploading, immediately delete the sent message to prevent delivering unwanted track
+              if (signal.aborted) {
+                if (sent?.message_id) {
+                  try {
+                    await ctx.telegram.deleteMessage(ctx.chat.id, sent.message_id);
+                  } catch {}
+                }
+                await result.cleanup();
+                throw new Error('DOWNLOAD_CANCELLED');
+              }
+
+              if (sent && ctx.chat?.id) {
+                undoService.record(ctx.chat.id, [sent.message_id], ctx.from?.id);
+              }
+
+              await result.cleanup();
+              completedCount++;
+
+              // Pacing delay between tracks (1500ms) with instant abort responsiveness
+              await sleepWithSignal(1500, signal);
+            } finally {
+              playlistSignal.removeEventListener('abort', onPlaylistAbort);
+              if (queueSignal) queueSignal.removeEventListener('abort', onQueueAbort);
             }
-          }
-
-          // If cancelled while uploading, immediately delete the sent message to prevent delivering unwanted track
-          if (signal?.aborted) {
-            if (sent?.message_id) {
-              try {
-                await ctx.telegram.deleteMessage(ctx.chat.id, sent.message_id);
-              } catch {}
-            }
-            await result.cleanup();
-            throw new Error('DOWNLOAD_CANCELLED');
-          }
-
-          if (sent && ctx.chat?.id) {
-            undoService.record(ctx.chat.id, [sent.message_id], ctx.from?.id);
-          }
-
-          await result.cleanup();
-          completedCount++;
-
-          // Pacing delay between tracks (1500ms) with instant abort responsiveness
-          await sleepWithSignal(1500, signal);
+          }, { ctx, statusMessageId, originalMessageId, isPlaylistTrack: true });
         } catch (trackError) {
-          if (trackError.message === 'DOWNLOAD_CANCELLED' || signal?.aborted) {
+          if (trackError.message === 'DOWNLOAD_CANCELLED' || playlistSignal.aborted) {
             throw new Error('DOWNLOAD_CANCELLED');
           }
           logger.warn(`Failed to download track "${track.title}" from playlist: ${trackError.message}`);
           failedCount++;
           // Wait 1s and proceed to next track so one broken track doesn't kill the playlist
           try {
-            await sleepWithSignal(1000, signal);
+            await sleepWithSignal(1000, playlistSignal);
           } catch {
             throw new Error('DOWNLOAD_CANCELLED');
           }
@@ -416,7 +452,7 @@ class SpotifyStrategy extends BaseStrategy {
       }
 
       // Finish playlist (only if completed naturally)
-      if (signal?.aborted) {
+      if (playlistSignal.aborted) {
         throw new Error('DOWNLOAD_CANCELLED');
       }
 
@@ -438,7 +474,38 @@ class SpotifyStrategy extends BaseStrategy {
       }
 
       logger.info(`Spotify playlist "${entity.title}" completed (${completedCount} sent, ${failedCount} failed)`);
-    }, { ctx, statusMessageId, originalMessageId });
+    } finally {
+      this.activePlaylists.delete(statusMessageId);
+    }
+  }
+
+  /**
+   * Cancel an in-flight active Spotify playlist download.
+   * @param {string|number} chatId
+   * @param {number|null} targetMessageId
+   * @param {number|null} userId
+   * @param {boolean} isChatAdmin
+   * @returns {{ statusMessageId: number } | { unauthorized: true } | null}
+   */
+  cancelActive(chatId, targetMessageId = null, userId = null, isChatAdmin = false) {
+    const keyChatId = Number(chatId);
+    const parsedTargetId = targetMessageId ? Number(targetMessageId) : null;
+    const parsedUserId = userId ? Number(userId) : null;
+
+    for (const [msgId, active] of Array.from(this.activePlaylists.entries()).reverse()) {
+      if (active.chatId && Number(active.chatId) !== keyChatId) continue;
+      if (parsedTargetId && msgId !== parsedTargetId) continue;
+
+      const isOwner = parsedUserId && active.userId === parsedUserId;
+      if (!isChatAdmin && !isOwner && active.userId) {
+        return { unauthorized: true };
+      }
+
+      active.abortController.abort();
+      this.activePlaylists.delete(msgId);
+      return { statusMessageId: msgId, active };
+    }
+    return null;
   }
 
   /**

@@ -120,6 +120,7 @@ class QueueService {
         originalMessageId: meta.originalMessageId,
         chatId: meta.ctx?.chat?.id,
         userId: meta.ctx?.from?.id,
+        isPlaylistTrack: Boolean(meta.isPlaylistTrack),
         abortController,
         signal: abortController.signal,
         resolve,
@@ -166,7 +167,7 @@ class QueueService {
   }
 
   async notifyWaiting(job) {
-    if (!job.ctx || !job.statusMessageId) return;
+    if (!job.ctx || !job.statusMessageId || job.isPlaylistTrack) return;
     const position = this.waiting.findIndex(j => j.id === job.id) + 1;
     try {
       await job.ctx.telegram.editMessageText(
@@ -183,7 +184,7 @@ class QueueService {
   async updateRemainingPositions() {
     for (let i = 0; i < this.waiting.length; i++) {
       const job = this.waiting[i];
-      if (!job.ctx || !job.statusMessageId) continue;
+      if (!job.ctx || !job.statusMessageId || job.isPlaylistTrack) continue;
       const position = i + 1;
       try {
         await job.ctx.telegram.editMessageText(

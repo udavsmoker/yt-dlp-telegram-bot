@@ -17,11 +17,38 @@ async function handleCancel(ctx) {
   const userId = ctx.from?.id;
   const isChatAdmin = await isAdmin(ctx);
 
-  // 1. Try cancelling active or queued download job in QueueService
+  // 1. Check for active Spotify playlist download
+  let spotActiveResult = null;
+  if (spotifyStrategy && typeof spotifyStrategy.cancelActive === 'function') {
+    spotActiveResult = spotifyStrategy.cancelActive(chatId, targetMessageId, userId, isChatAdmin);
+    if (spotActiveResult && spotActiveResult.unauthorized) {
+      return ctx.reply('⚠️ You can only cancel your own downloads. Ask a chat admin to cancel it.');
+    }
+  }
+
+  // 2. Try cancelling active or queued download job in QueueService
   const cancelResult = queueService.cancelJob(chatId, targetMessageId, userId, isChatAdmin);
 
   if (cancelResult && cancelResult.unauthorized) {
     return ctx.reply('⚠️ You can only cancel your own downloads. Ask a chat admin to cancel it.');
+  }
+
+  if (spotActiveResult && spotActiveResult.statusMessageId) {
+    logger.info(`Spotify playlist #${spotActiveResult.statusMessageId} cancelled by ${userInfo}`);
+
+    // Delete user's /cancel command message
+    try {
+      await ctx.deleteMessage();
+    } catch {}
+
+    try {
+      await ctx.telegram.editMessageText(chatId, spotActiveResult.statusMessageId, null, '❌ Download cancelled.');
+      setTimeout(() => {
+        ctx.telegram.deleteMessage(chatId, spotActiveResult.statusMessageId).catch(() => {});
+      }, 3000);
+    } catch {}
+
+    return;
   }
 
   if (cancelResult && cancelResult.job) {

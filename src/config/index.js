@@ -21,7 +21,7 @@ module.exports = {
     ttlHours: parseInt(process.env.CACHE_TTL_HOURS || '48', 10)
   },
   queue: {
-    concurrency: parseInt(process.env.DOWNLOAD_CONCURRENCY || '2', 10)
+    concurrency: parseInt(process.env.DOWNLOAD_CONCURRENCY || '4', 10)
   },
   rateLimit: {
     enabled: process.env.RATE_LIMIT_ENABLED !== 'false',

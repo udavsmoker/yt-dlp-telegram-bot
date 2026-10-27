@@ -87,7 +87,10 @@ async function handleDownload(ctx, next) {
         return;
       }
     }
-    return spotifyStrategy.handle(ctx, { url, userInfo, originalMessageId });
+    spotifyStrategy.handle(ctx, { url, userInfo, originalMessageId }).catch(error => {
+      logger.error(`Background download error for ${userInfo} in ${spotifyStrategy.name}:`, error);
+    });
+    return;
   }
 
   // Rate limiting for immediate downloads

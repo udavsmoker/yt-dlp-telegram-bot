@@ -32,7 +32,8 @@ async function handleHelp(ctx) {
 /setsassiness <0-100>
 
 *Usage:*
-Just send a valid video link.
+• Send a video link (YouTube, TikTok, Instagram, Bluesky, etc.)
+• Send a Spotify link (track, album, playlist) for 320 kbps MP3s with album art
 Max size: ${maxSize}.
   `;
   

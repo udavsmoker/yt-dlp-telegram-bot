@@ -82,7 +82,7 @@ function isValidVideoUrl(url) {
     'twitter.com', 'x.com', 'facebook.com', 'fb.watch',
     'reddit.com', 'vimeo.com', 'dailymotion.com', 'twitch.tv',
     'streamable.com', 'soundcloud.com', 'bandcamp.com',
-    'bsky.app',
+    'bsky.app', 'spotify.com', 'spotify.link',
     // Extra domains loaded from local-domains.json (gitignored)
     ...(localConfig.extraDomains || [])
   ];

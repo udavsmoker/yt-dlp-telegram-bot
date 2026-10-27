@@ -13,7 +13,8 @@ async function handleAbout(ctx) {
 This bot downloads videos using the powerful yt-dlp engine.
 
 *Features:*
-• High-quality downloads
+• High-quality video downloads
+• Spotify track, album, and playlist downloading (320 kbps MP3 with cover art)
 • Automatic format selection
 • Fast and reliable
 • Free to use

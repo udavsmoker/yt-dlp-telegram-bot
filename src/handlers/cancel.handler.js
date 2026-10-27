@@ -1,5 +1,5 @@
 const queueService = require('../services/queue.service');
-const { youtubeStrategy } = require('./download');
+const { youtubeStrategy, spotifyStrategy } = require('./download');
 const { isAdmin, getUserInfo } = require('../utils/helpers');
 const logger = require('../utils/logger');
 
@@ -82,7 +82,31 @@ async function handleCancel(ctx) {
     }
   }
 
-  // 3. Nothing found to cancel
+  // 3. Try cancelling pending Spotify confirmation prompt
+  if (spotifyStrategy && typeof spotifyStrategy.cancelPending === 'function') {
+    const spotResult = spotifyStrategy.cancelPending(chatId, targetMessageId, userId, isChatAdmin);
+    if (spotResult && spotResult.unauthorized) {
+      return ctx.reply('⚠️ You can only cancel your own requests. Ask a chat admin to cancel it.');
+    }
+    if (spotResult && spotResult.messageId) {
+      try {
+        await ctx.telegram.deleteMessage(chatId, spotResult.messageId);
+      } catch {}
+      try {
+        await ctx.deleteMessage();
+      } catch {}
+
+      try {
+        const confirmation = await ctx.reply('❌ Request cancelled.');
+        setTimeout(() => {
+          ctx.telegram.deleteMessage(chatId, confirmation.message_id).catch(() => {});
+        }, 3000);
+      } catch {}
+      return;
+    }
+  }
+
+  // 4. Nothing found to cancel
   return ctx.reply('⚠️ No active downloads to cancel.');
 }
 

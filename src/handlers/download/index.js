@@ -13,6 +13,7 @@ const YouTubeStrategy = require('./strategies/youtube.strategy');
 const InstagramStrategy = require('./strategies/instagram.strategy');
 const TikTokStrategy = require('./strategies/tiktok.strategy');
 const BlueskyStrategy = require('./strategies/bluesky.strategy');
+const SpotifyStrategy = require('./strategies/spotify.strategy');
 const GenericStrategy = require('./strategies/generic.strategy');
 const { handleMp3Command, handleAudioCallback } = require('./audio/audio-extractor');
 
@@ -20,6 +21,7 @@ const youtubeStrategy = new YouTubeStrategy();
 const instagramStrategy = new InstagramStrategy();
 const tiktokStrategy = new TikTokStrategy();
 const blueskyStrategy = new BlueskyStrategy();
+const spotifyStrategy = new SpotifyStrategy();
 const genericStrategy = new GenericStrategy();
 
 const strategies = [
@@ -27,6 +29,7 @@ const strategies = [
   instagramStrategy,
   tiktokStrategy,
   blueskyStrategy,
+  spotifyStrategy,
   genericStrategy
 ];
 
@@ -75,6 +78,18 @@ async function handleDownload(ctx, next) {
     }
   }
 
+  // Spotify check (single track or album/playlist prompt)
+  if (spotifyStrategy.canHandle(url)) {
+    if (userId) {
+      const rateLimit = downloadLimiter.check(String(userId));
+      if (rateLimit.limited) {
+        await ctx.reply('⏱ Please wait a moment before making another request.');
+        return;
+      }
+    }
+    return spotifyStrategy.handle(ctx, { url, userInfo, originalMessageId });
+  }
+
   // Rate limiting for immediate downloads
   if (userId) {
     const rateLimit = downloadLimiter.check(String(userId));
@@ -112,11 +127,21 @@ async function handleInstagramCallback(ctx) {
   return instagramStrategy.handleCallback(ctx);
 }
 
+/**
+ * Handle callback queries from Spotify inline keyboard.
+ * @param {object} ctx
+ */
+async function handleSpotifyCallback(ctx) {
+  return spotifyStrategy.handleCallback(ctx);
+}
+
 module.exports = {
   handleDownload,
   handleYouTubeCallback,
   handleInstagramCallback,
+  handleSpotifyCallback,
   handleMp3Command,
   handleAudioCallback,
-  youtubeStrategy
+  youtubeStrategy,
+  spotifyStrategy
 };

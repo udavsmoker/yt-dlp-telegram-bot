@@ -205,7 +205,8 @@ class SpotifyService {
         album: title,
         durationMs: t.duration || 0,
         trackNumber: idx + 1,
-        coverUrl // fallback to playlist cover if track cover is not explicit
+        coverUrl: null, // Individual track album art will be resolved on download
+        playlistCoverUrl: coverUrl // Fallback in case individual resolution fails
       };
     });
 

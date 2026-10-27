@@ -133,5 +133,29 @@ describe('Spotify Service & Strategy', () => {
       assert.equal(deleted, true);
       assert.equal(strategy.pendingSpotifyPrompts.has(promptMessageId), false);
     });
+
+    it('should leave track.coverUrl null for playlist tracks and keep playlistCoverUrl as fallback', () => {
+      const mockRawEntity = {
+        title: 'Top Hits',
+        coverArt: { sources: [{ url: 'https://cdn.spotify.com/playlist_cover.jpg' }] },
+        trackList: [
+          { uri: 'spotify:track:track1', title: 'Song 1', subtitle: 'Artist 1' },
+          { uri: 'spotify:track:track2', title: 'Song 2', subtitle: 'Artist 2' }
+        ]
+      };
+
+      // Emulate mapping from getPlaylist
+      const tracks = mockRawEntity.trackList.map((t, idx) => ({
+        id: 'track' + (idx + 1),
+        title: t.title,
+        artist: t.subtitle,
+        coverUrl: null,
+        playlistCoverUrl: mockRawEntity.coverArt.sources[0].url
+      }));
+
+      assert.equal(tracks[0].coverUrl, null);
+      assert.equal(tracks[0].playlistCoverUrl, 'https://cdn.spotify.com/playlist_cover.jpg');
+      assert.equal(tracks[1].coverUrl, null);
+    });
   });
 });

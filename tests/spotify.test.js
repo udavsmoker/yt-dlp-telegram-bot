@@ -426,4 +426,166 @@ describe('Spotify Service & Strategy', () => {
       assert.equal(result.title, 'Fallback Playlist');
     });
   });
+
+  describe('Innertube candidate search & multi-candidate fallback', () => {
+    const spotifyAudioService = require('../src/services/spotify-audio.service');
+    const axios = require('axios');
+
+    it('should parse Innertube search responses from cards, shelves, and item sections', async () => {
+      const originalPost = axios.post;
+      axios.post = async () => ({
+        data: {
+          contents: {
+            tabbedSearchResultsRenderer: {
+              tabs: [{
+                tabRenderer: {
+                  content: {
+                    sectionListRenderer: {
+                      contents: [
+                        {
+                          musicCardShelfRenderer: {
+                            title: { runs: [{ text: 'Official Card Song', navigationEndpoint: { watchEndpoint: { videoId: 'card_vid_11' } } }] },
+                            subtitle: { runs: [{ text: 'Artist X' }, { text: ' • ' }, { text: '3:30' }] }
+                          }
+                        },
+                        {
+                          itemSectionRenderer: {
+                            contents: [{
+                              musicResponsiveListItemRenderer: {
+                                flexColumns: [
+                                  { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: 'Audio Track' }] } } },
+                                  { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: 'Artist X' }] } } }
+                                ],
+                                playlistItemData: { videoId: 'shelf_vid_2' },
+                                fixedColumns: [{
+                                  musicResponsiveListItemFixedColumnRenderer: { text: { runs: [{ text: '3:30' }] } }
+                                }]
+                              }
+                            }]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }]
+            }
+          }
+        }
+      });
+
+      try {
+        const results = await spotifyAudioService.searchInnertube('Artist X Song');
+        assert.equal(results.length, 2);
+        assert.equal(results[0].id, 'card_vid_11');
+        assert.equal(results[0].duration, 210);
+        assert.equal(results[1].id, 'shelf_vid_2');
+        assert.equal(results[1].duration, 210);
+      } finally {
+        axios.post = originalPost;
+      }
+    });
+  });
+
+  describe('Pipelined playlist download & failed tracks summary', () => {
+    const SpotifyStrategy = require('../src/handlers/download/strategies/spotify.strategy');
+    const spotifyAudioService = require('../src/services/spotify-audio.service');
+
+    it('should send summary report when some tracks in playlist fail', async () => {
+      const strategy = new SpotifyStrategy();
+
+      const originalDownloadAndTag = spotifyAudioService.downloadAndTagTrack;
+      spotifyAudioService.downloadAndTagTrack = async (track) => {
+        if (track.id === 'bad_track') {
+          throw new Error('Video not available');
+        }
+        return {
+          title: track.title,
+          artist: track.artist,
+          duration: 180,
+          audioPath: '/tmp/fake.mp3',
+          thumbnailPath: null,
+          cleanup: async () => {}
+        };
+      };
+
+      const replies = [];
+      const sentAudios = [];
+      const editedMessages = [];
+
+      const ctx = {
+        chat: { id: 12345, type: 'private' },
+        from: { id: 999, username: 'testuser' },
+        telegram: {
+          editMessageText: async (chatId, msgId, extra, text) => {
+            editedMessages.push({ msgId, text });
+          },
+          callApi: async (method, params) => {
+            if (method === 'sendAudio') {
+              sentAudios.push(params);
+              return { message_id: 1000 + sentAudios.length };
+            }
+          },
+          deleteMessage: async () => {}
+        },
+        reply: async (text, opts) => {
+          replies.push({ text, opts });
+          return { message_id: 2000 + replies.length };
+        }
+      };
+
+      const entity = {
+        title: 'Test Album',
+        tracks: [
+          { id: 'track_1', title: 'Good Song 1', artist: 'Artist A' },
+          { id: 'bad_track', title: 'Broken Song', artist: 'Artist B' },
+          { id: 'track_3', title: 'Good Song 2', artist: 'Artist C' }
+        ]
+      };
+
+      try {
+        await strategy.processPlaylistDownload(ctx, entity, '@testuser (999)', 555, null);
+
+        // 2 audio files should have been sent to Telegram in order
+        assert.equal(sentAudios.length, 2);
+        assert.equal(sentAudios[0].title, 'Good Song 1');
+        assert.equal(sentAudios[1].title, 'Good Song 2');
+
+        // Since 1 track failed, a summary report must be sent to the chat
+        assert.equal(replies.length, 1);
+        assert.ok(replies[0].text.includes('Playlist finished with issues'));
+        assert.ok(replies[0].text.includes('Skipped: <b>1</b> tracks'));
+        assert.ok(replies[0].text.includes('Broken Song'));
+        assert.ok(replies[0].text.includes('Artist B'));
+      } finally {
+        spotifyAudioService.downloadAndTagTrack = originalDownloadAndTag;
+      }
+    });
+
+    it('should format private/not found playlist error with clear Spotify troubleshooting tips', async () => {
+      const strategy = new SpotifyStrategy();
+      let sentText = '';
+      let sentOpts = null;
+
+      const mockCtx = {
+        chat: { id: 123 },
+        telegram: {
+          editMessageText: async (chatId, msgId, extra, text, opts) => {
+            sentText = text;
+            sentOpts = opts;
+          }
+        }
+      };
+
+      const error = new Error('Spotify playlist not found or is private (ID: 1X0aaPypJvQ64itjckrBYp)');
+      await strategy.sendErrorMessage(mockCtx, 777, error, '@testuser (123)');
+
+      assert.ok(sentText.includes('Spotify playlist not found or is private'));
+      assert.ok(sentText.includes('Make Public'));
+      assert.ok(sentText.includes('Private, secret, or invite-only playlists cannot be accessed'));
+      assert.ok(!sentText.includes('Video must be public'));
+      assert.ok(!sentText.includes('Max size: 2000MB'));
+      assert.equal(sentOpts?.parse_mode, 'HTML');
+    });
+  });
 });

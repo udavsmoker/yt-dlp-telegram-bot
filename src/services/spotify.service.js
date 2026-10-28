@@ -108,7 +108,7 @@ class SpotifyService {
         if (!entity) {
           const status = json?.props?.pageProps?.status;
           if (status === 404) {
-            throw new Error(`Spotify ${type} not found (ID: ${id})`);
+            throw new Error(`Spotify ${type} not found or is private (ID: ${id})`);
           }
           throw new Error(`Invalid Spotify metadata structure for ${type}/${id}`);
         }
@@ -116,7 +116,7 @@ class SpotifyService {
         return entity;
       } catch (err) {
         lastError = err;
-        if (err.message.includes('not found')) {
+        if (err.message.includes('not found') || err.message.includes('private')) {
           throw err;
         }
         if (attempt < 3) {

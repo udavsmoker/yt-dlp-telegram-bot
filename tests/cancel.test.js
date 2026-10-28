@@ -152,6 +152,42 @@ describe('Cancel Handler & Download Cancellation', () => {
       await assert.rejects(enqueuePromise, { message: 'DOWNLOAD_CANCELLED' });
     });
 
+    it('should cancel active Spotify playlist download and update status with count', async () => {
+      const { spotifyStrategy } = require('../src/handlers/download');
+      const abortController = new AbortController();
+
+      spotifyStrategy.activePlaylists.set(777, {
+        abortController,
+        chatId: 100,
+        userId: 44,
+        statusMessageId: 777,
+        title: 'Daily Mix 1',
+        total: 50,
+        getCompletedCount: () => 5
+      });
+
+      const edited = [];
+      const ctx = {
+        chat: { id: 100, type: 'private' },
+        from: { id: 44 },
+        message: { message_id: 888, text: '/cancel' },
+        deleteMessage: async () => {},
+        telegram: {
+          editMessageText: async (chatId, msgId, _inline, text, opts) => {
+            edited.push({ msgId, text, opts });
+          }
+        }
+      };
+
+      await handleCancel(ctx);
+
+      assert.equal(abortController.signal.aborted, true);
+      assert.equal(edited.length, 1);
+      assert.equal(edited[0].msgId, 777);
+      assert.ok(edited[0].text.includes('Playlist download cancelled: Daily Mix 1'));
+      assert.ok(edited[0].text.includes('Sent <b>5/50</b> tracks before cancellation.'));
+    });
+
     it('should cancel pending YouTube selection keyboard', async () => {
       youtubeStrategy.pendingYouTubeDownloads.set(990, {
         userId: 88,

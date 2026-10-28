@@ -4,9 +4,10 @@ const spotifyAudioService = require('../../../services/spotify-audio.service');
 const queueService = require('../../../services/queue.service');
 const undoService = require('../../../services/undo.service');
 const logger = require('../../../utils/logger');
-const { getFileForTelegram, renderProgressBar, getUserInfo, cleanupFile } = require('../../../utils/helpers');
+const { getFileForTelegram, renderProgressBar, getUserInfo, cleanupFile, escapeHtml } = require('../../../utils/helpers');
 const { getSenderInfo } = require('../common/telegram-sender');
 const { downloadLimiter } = require('../../../middleware/rate-limit.middleware');
+const config = require('../../../config');
 
 class SpotifyStrategy extends BaseStrategy {
   constructor() {
@@ -146,7 +147,8 @@ class SpotifyStrategy extends BaseStrategy {
           ctx.chat.id,
           statusMessage.message_id,
           null,
-          `⚠️ No tracks found in this ${type}.`
+          `⚠️ <b>Spotify ${type === 'album' ? 'Album' : 'Playlist'} is empty</b>\n\n💡 This ${type} does not contain any playable tracks.`,
+          { parse_mode: 'HTML' }
         );
         return;
       }
@@ -228,12 +230,51 @@ class SpotifyStrategy extends BaseStrategy {
 
     if (callbackData === 'spot_cancel') {
       await ctx.answerCbQuery('❌ Download cancelled');
+      if (ctx.telegram?.editMessageText) {
+        try {
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            messageId,
+            null,
+            '❌ <b>Download cancelled.</b>',
+            { parse_mode: 'HTML', reply_markup: { inline_keyboard: [] } }
+          );
+          const t = setTimeout(() => {
+            ctx.telegram.deleteMessage(ctx.chat.id, messageId).catch(() => {});
+          }, 3000);
+          t.unref?.();
+          return;
+        } catch {}
+      }
       await ctx.deleteMessage().catch(() => {});
       return;
     }
 
     if (callbackData === 'spot_download') {
       await ctx.answerCbQuery('🎵 Starting playlist download...');
+
+      // Immediately remove buttons and show initial progress card so user has 0ms visual feedback
+      const totalTracks = pending.entity?.tracks?.length || 0;
+      if (ctx.telegram?.editMessageText) {
+        try {
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            messageId,
+            null,
+            [
+              `🎵 <b>Downloading: ${escapeHtml(pending.entity.title)}</b>`,
+              `[░░░░░░░░░░] 0% (0/${totalTracks} sent)`,
+              `🎶 <i>Starting parallel download engine...</i>`,
+              '',
+              `💡 Send /cancel to stop playlist download`
+            ].join('\n'),
+            {
+              parse_mode: 'HTML',
+              reply_markup: { inline_keyboard: [] }
+            }
+          );
+        } catch {}
+      }
 
       const userInfo = getUserInfo(ctx);
       this.processPlaylistDownload(ctx, pending.entity, userInfo, messageId, pending.originalMessageId).catch(err => {
@@ -247,13 +288,14 @@ class SpotifyStrategy extends BaseStrategy {
   }
 
   /**
-   * Sequential playlist download pipeline with paced Telegram delivery, individual track cover art,
-   * per-track queue scheduling, and immediate /cancel signal aborting.
+   * Pipelined parallel playlist download with sliding window concurrency, in-order Telegram delivery,
+   * detailed failed track tracking, and prompt cancellation.
    */
   async processPlaylistDownload(ctx, entity, userInfo, statusMessageId, originalMessageId) {
     const total = entity.tracks.length;
     let completedCount = 0;
     let failedCount = 0;
+    const failedTracks = [];
 
     const playlistAbortController = new AbortController();
     const playlistSignal = playlistAbortController.signal;
@@ -263,7 +305,10 @@ class SpotifyStrategy extends BaseStrategy {
       chatId: ctx.chat.id,
       userId: ctx.from?.id,
       statusMessageId,
-      originalMessageId
+      originalMessageId,
+      title: entity.title,
+      total,
+      getCompletedCount: () => completedCount
     });
 
     const sleepWithSignal = (ms, signal) => {
@@ -282,7 +327,110 @@ class SpotifyStrategy extends BaseStrategy {
       });
     };
 
-    logger.info(`Starting batch download of Spotify playlist "${entity.title}" (${total} tracks) for ${userInfo}`);
+    const concurrency = Math.max(1, Math.min(config.spotify?.concurrency || 3, 4));
+    const maxLookahead = concurrency;
+
+    logger.info(`Starting batch download of Spotify playlist "${entity.title}" (${total} tracks, concurrency: ${concurrency}) for ${userInfo}`);
+
+    const trackPromises = new Array(total);
+    const trackResolvers = new Array(total);
+    for (let i = 0; i < total; i++) {
+      trackPromises[i] = new Promise(resolve => {
+        trackResolvers[i] = resolve;
+      });
+    }
+
+    let nextDownloadIdx = 0;
+    let sendIdx = 0;
+    let workerWakeup = null;
+
+    const prepareTrack = async (index) => {
+      const track = entity.tracks[index];
+
+      return queueService.enqueue(async ({ signal: queueSignal } = {}) => {
+        const combinedAbort = new AbortController();
+        const onPlaylistAbort = () => combinedAbort.abort();
+        const onQueueAbort = () => combinedAbort.abort();
+
+        playlistSignal.addEventListener('abort', onPlaylistAbort, { once: true });
+        queueSignal?.addEventListener('abort', onQueueAbort, { once: true });
+
+        const signal = combinedAbort.signal;
+
+        try {
+          if (signal.aborted) {
+            throw new Error('DOWNLOAD_CANCELLED');
+          }
+
+          // Fetch individual track album cover art on demand if needed
+          if (!track.coverUrl && track.id && !track.id.startsWith('track_')) {
+            try {
+              const trackMeta = await spotifyService.getTrack(track.id);
+              if (trackMeta) {
+                if (trackMeta.coverUrl) track.coverUrl = trackMeta.coverUrl;
+                if (trackMeta.album) track.album = trackMeta.album;
+                if (trackMeta.releaseDate) track.releaseDate = trackMeta.releaseDate;
+              }
+            } catch (metaErr) {
+              logger.warn(`Could not fetch individual cover for "${track.title}": ${metaErr.message}`);
+            }
+          }
+
+          if (!track.coverUrl && track.playlistCoverUrl) {
+            track.coverUrl = track.playlistCoverUrl;
+          }
+
+          if (signal.aborted) {
+            throw new Error('DOWNLOAD_CANCELLED');
+          }
+
+          const result = await spotifyAudioService.downloadAndTagTrack(track, { signal });
+          return { success: true, track, result };
+        } catch (err) {
+          if (signal.aborted || err.message === 'DOWNLOAD_CANCELLED') {
+            throw new Error('DOWNLOAD_CANCELLED');
+          }
+          logger.warn(`Failed preparing track "${track.title}" from playlist: ${err.message}`);
+          return { success: false, track, error: err.message };
+        } finally {
+          playlistSignal.removeEventListener('abort', onPlaylistAbort);
+          if (queueSignal) queueSignal.removeEventListener('abort', onQueueAbort);
+        }
+      }, { ctx, statusMessageId, originalMessageId, isPlaylistTrack: true });
+    };
+
+    const runWorker = async (workerId) => {
+      while (true) {
+        if (playlistSignal.aborted) break;
+
+        while (nextDownloadIdx < total && (nextDownloadIdx - sendIdx) >= maxLookahead) {
+          if (playlistSignal.aborted) break;
+          await new Promise(r => { workerWakeup = r; });
+        }
+
+        if (playlistSignal.aborted || nextDownloadIdx >= total) break;
+        const currentIdx = nextDownloadIdx++;
+
+        try {
+          const outcome = await prepareTrack(currentIdx);
+          if (playlistSignal.aborted) {
+            if (outcome.result?.cleanup) await outcome.result.cleanup().catch(() => {});
+            trackResolvers[currentIdx]({ success: false, track: entity.tracks[currentIdx], error: 'DOWNLOAD_CANCELLED' });
+            break;
+          }
+          trackResolvers[currentIdx](outcome);
+        } catch (workerErr) {
+          if (playlistSignal.aborted || workerErr.message === 'DOWNLOAD_CANCELLED') {
+            trackResolvers[currentIdx]({ success: false, track: entity.tracks[currentIdx], error: 'DOWNLOAD_CANCELLED' });
+            break;
+          }
+          trackResolvers[currentIdx]({ success: false, track: entity.tracks[currentIdx], error: workerErr.message });
+        }
+      }
+    };
+
+    const workers = Array.from({ length: concurrency }, (_, id) => runWorker(id));
+    let lastProgressEdit = 0;
 
     try {
       for (let i = 0; i < total; i++) {
@@ -290,20 +438,127 @@ class SpotifyStrategy extends BaseStrategy {
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
-        const track = entity.tracks[i];
-        const percent = Math.round(((i + 1) / total) * 100);
+        const outcome = await trackPromises[i];
+        if (playlistSignal.aborted) {
+          if (outcome?.result?.cleanup) await outcome.result.cleanup().catch(() => {});
+          throw new Error('DOWNLOAD_CANCELLED');
+        }
 
-        // 1. Update playlist progress card (skip if cancelled)
-        if (!playlistSignal.aborted) {
+        const track = outcome.track || entity.tracks[i];
+
+        if (!outcome.success || !outcome.result) {
+          failedCount++;
+          failedTracks.push({
+            title: track.title,
+            artist: track.artist || (track.artists && track.artists.join(', ')) || 'Unknown Artist',
+            error: outcome.error || 'Failed to download'
+          });
+        } else {
+          const result = outcome.result;
+          try {
+            const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+            const audioOpts = {
+              title: result.title,
+              performer: result.artist,
+              duration: result.duration
+            };
+
+            if (isGroup) {
+              const sender = getSenderInfo(ctx);
+              audioOpts.caption = `Sent by ${sender.caption}`;
+              audioOpts.parse_mode = 'HTML';
+            }
+
+            if (result.thumbnailPath) {
+              audioOpts.thumbnail = getFileForTelegram(result.thumbnailPath);
+            }
+
+            let sent = null;
+            let retries = 3;
+            while (retries > 0 && !sent) {
+              if (playlistSignal.aborted) {
+                await result.cleanup();
+                throw new Error('DOWNLOAD_CANCELLED');
+              }
+
+              try {
+                sent = await ctx.telegram.callApi('sendAudio', {
+                  chat_id: ctx.chat.id,
+                  audio: getFileForTelegram(result.audioPath),
+                  ...audioOpts
+                }, playlistSignal ? { signal: playlistSignal } : {});
+              } catch (sendErr) {
+                if (playlistSignal.aborted || sendErr.name === 'AbortError' || sendErr.code === 'ERR_ABORTED') {
+                  await result.cleanup();
+                  throw new Error('DOWNLOAD_CANCELLED');
+                }
+                if (sendErr.parameters?.retry_after) {
+                  const waitSec = sendErr.parameters.retry_after + 1;
+                  logger.warn(`Telegram flood limit hit during playlist! Waiting ${waitSec}s`);
+                  await sleepWithSignal(waitSec * 1000, playlistSignal);
+                  retries--;
+                } else {
+                  throw sendErr;
+                }
+              }
+            }
+
+            if (playlistSignal.aborted) {
+              if (sent?.message_id) {
+                try { await ctx.telegram.deleteMessage(ctx.chat.id, sent.message_id); } catch {}
+              }
+              await result.cleanup();
+              throw new Error('DOWNLOAD_CANCELLED');
+            }
+
+            if (sent && ctx.chat?.id) {
+              undoService.record(ctx.chat.id, [sent.message_id], ctx.from?.id);
+            }
+
+            completedCount++;
+          } catch (sendErr) {
+            if (playlistSignal.aborted) {
+              await result.cleanup();
+              throw new Error('DOWNLOAD_CANCELLED');
+            }
+            logger.warn(`Failed to send track "${track.title}" to Telegram: ${sendErr.message}`);
+            failedCount++;
+            failedTracks.push({
+              title: track.title,
+              artist: track.artist || 'Unknown Artist',
+              error: sendErr.message
+            });
+          } finally {
+            await result.cleanup();
+          }
+        }
+
+        sendIdx++;
+        if (workerWakeup) {
+          const wake = workerWakeup;
+          workerWakeup = null;
+          wake();
+        }
+
+        // Throttled progress card update (every 2.0s or on the last track)
+        const now = Date.now();
+        if (now - lastProgressEdit >= 2000 || i === total - 1) {
+          lastProgressEdit = now;
+          const percent = Math.round(((i + 1) / total) * 100);
+          const totalBars = 10;
+          const filled = Math.max(0, Math.min(totalBars, Math.round((percent / 100) * totalBars)));
+          const empty = totalBars - filled;
+          const bar = '█'.repeat(filled) + '░'.repeat(empty);
+
           try {
             await ctx.telegram.editMessageText(
               ctx.chat.id,
               statusMessageId,
               null,
               [
-                `🎵 <b>Downloading: ${entity.title}</b>`,
-                `📀 Track ${i + 1}/${total} (${percent}%)`,
-                `🎶 <i>${track.title} — ${track.artist}</i>`,
+                `🎵 <b>Downloading: ${escapeHtml(entity.title)}</b>`,
+                `[${bar}] ${percent}% (${completedCount}/${total} sent)`,
+                `🎶 <i>${escapeHtml(track.title)} — ${escapeHtml(track.artist)}</i>`,
                 '',
                 `💡 Send /cancel to stop playlist download`
               ].join('\n'),
@@ -312,160 +567,54 @@ class SpotifyStrategy extends BaseStrategy {
           } catch {}
         }
 
-        try {
-          if (playlistSignal.aborted) {
-            throw new Error('DOWNLOAD_CANCELLED');
-          }
-
-          // Enqueue each track individually so queue slots are shared cooperatively across users
-          await queueService.enqueue(async ({ signal: queueSignal } = {}) => {
-            const combinedAbort = new AbortController();
-            const onPlaylistAbort = () => combinedAbort.abort();
-            const onQueueAbort = () => combinedAbort.abort();
-
-            playlistSignal.addEventListener('abort', onPlaylistAbort, { once: true });
-            queueSignal?.addEventListener('abort', onQueueAbort, { once: true });
-
-            const signal = combinedAbort.signal;
-
-            try {
-              if (signal.aborted) {
-                throw new Error('DOWNLOAD_CANCELLED');
-              }
-
-              // 2. Fetch individual track album cover art on demand (playlist embed only has playlist cover)
-              if (!track.coverUrl && track.id && !track.id.startsWith('track_')) {
-                try {
-                  const trackMeta = await spotifyService.getTrack(track.id);
-                  if (trackMeta) {
-                    if (trackMeta.coverUrl) track.coverUrl = trackMeta.coverUrl;
-                    if (trackMeta.album) track.album = trackMeta.album;
-                    if (trackMeta.releaseDate) track.releaseDate = trackMeta.releaseDate;
-                  }
-                } catch (metaErr) {
-                  logger.warn(`Could not fetch individual cover for "${track.title}": ${metaErr.message}`);
-                }
-              }
-              // Fallback to playlist cover if individual cover art was not found
-              if (!track.coverUrl && track.playlistCoverUrl) {
-                track.coverUrl = track.playlistCoverUrl;
-              }
-
-              if (signal.aborted) {
-                throw new Error('DOWNLOAD_CANCELLED');
-              }
-
-              // 3. Download and transcode track
-              const result = await spotifyAudioService.downloadAndTagTrack(track, { signal });
-
-              if (signal.aborted) {
-                await result.cleanup();
-                throw new Error('DOWNLOAD_CANCELLED');
-              }
-
-              const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
-              const audioOpts = {
-                title: result.title,
-                performer: result.artist,
-                duration: result.duration
-              };
-
-              if (isGroup) {
-                const sender = getSenderInfo(ctx);
-                audioOpts.caption = `Sent by ${sender.caption}`;
-                audioOpts.parse_mode = 'HTML';
-              }
-
-              if (result.thumbnailPath) {
-                audioOpts.thumbnail = getFileForTelegram(result.thumbnailPath);
-              }
-
-              // 4. Send to Telegram using abort-aware callApi with 429 flood protection retry
-              let sent = null;
-              let retries = 3;
-              while (retries > 0 && !sent) {
-                if (signal.aborted) {
-                  await result.cleanup();
-                  throw new Error('DOWNLOAD_CANCELLED');
-                }
-
-                try {
-                  sent = await ctx.telegram.callApi('sendAudio', {
-                    chat_id: ctx.chat.id,
-                    audio: getFileForTelegram(result.audioPath),
-                    ...audioOpts
-                  }, signal ? { signal } : {});
-                } catch (sendErr) {
-                  if (signal.aborted || sendErr.name === 'AbortError' || sendErr.code === 'ERR_ABORTED') {
-                    await result.cleanup();
-                    throw new Error('DOWNLOAD_CANCELLED');
-                  }
-                  if (sendErr.parameters?.retry_after) {
-                    const waitSec = sendErr.parameters.retry_after + 1;
-                    logger.warn(`Telegram flood limit hit during playlist! Waiting ${waitSec}s`);
-                    await sleepWithSignal(waitSec * 1000, signal);
-                    retries--;
-                  } else {
-                    throw sendErr;
-                  }
-                }
-              }
-
-              // If cancelled while uploading, immediately delete the sent message to prevent delivering unwanted track
-              if (signal.aborted) {
-                if (sent?.message_id) {
-                  try {
-                    await ctx.telegram.deleteMessage(ctx.chat.id, sent.message_id);
-                  } catch {}
-                }
-                await result.cleanup();
-                throw new Error('DOWNLOAD_CANCELLED');
-              }
-
-              if (sent && ctx.chat?.id) {
-                undoService.record(ctx.chat.id, [sent.message_id], ctx.from?.id);
-              }
-
-              await result.cleanup();
-              completedCount++;
-
-              // Pacing delay between tracks (1500ms) with instant abort responsiveness
-              await sleepWithSignal(1500, signal);
-            } finally {
-              playlistSignal.removeEventListener('abort', onPlaylistAbort);
-              if (queueSignal) queueSignal.removeEventListener('abort', onQueueAbort);
-            }
-          }, { ctx, statusMessageId, originalMessageId, isPlaylistTrack: true });
-        } catch (trackError) {
-          if (trackError.message === 'DOWNLOAD_CANCELLED' || playlistSignal.aborted) {
-            throw new Error('DOWNLOAD_CANCELLED');
-          }
-          logger.warn(`Failed to download track "${track.title}" from playlist: ${trackError.message}`);
-          failedCount++;
-          // Wait 1s and proceed to next track so one broken track doesn't kill the playlist
-          try {
-            await sleepWithSignal(1000, playlistSignal);
-          } catch {
-            throw new Error('DOWNLOAD_CANCELLED');
-          }
-        }
+        // Pacing delay between sending tracks
+        await sleepWithSignal(1000, playlistSignal);
       }
 
-      // Finish playlist (only if completed naturally)
       if (playlistSignal.aborted) {
         throw new Error('DOWNLOAD_CANCELLED');
       }
 
-      const summaryText = failedCount > 0
-        ? `✅ Playlist finished! Sent ${completedCount}/${total} tracks (${failedCount} unavailable).`
-        : `✅ Playlist complete! Sent all ${completedCount} tracks.`;
+      // Finish playlist notifications
+      if (failedTracks.length === 0) {
+        const summaryText = `✅ <b>Playlist complete!</b> Sent all ${completedCount} tracks.`;
+        try {
+          await ctx.telegram.editMessageText(ctx.chat.id, statusMessageId, null, summaryText, { parse_mode: 'HTML' });
+          setTimeout(() => {
+            ctx.telegram.deleteMessage(ctx.chat.id, statusMessageId).catch(() => {});
+          }, 10000);
+        } catch {}
+      } else {
+        // Detailed report of failed tracks sent as permanent message to user
+        const header = `⚠️ <b>Playlist finished with issues: ${escapeHtml(entity.title)}</b>\n` +
+          `• Successfully sent: <b>${completedCount}/${total}</b> tracks\n` +
+          `• Skipped: <b>${failedTracks.length}</b> tracks:\n\n`;
 
-      try {
-        await ctx.telegram.editMessageText(ctx.chat.id, statusMessageId, null, summaryText);
-        setTimeout(() => {
-          ctx.telegram.deleteMessage(ctx.chat.id, statusMessageId).catch(() => {});
-        }, 10000);
-      } catch {}
+        const trackLines = failedTracks.slice(0, 30).map((t, idx) =>
+          `${idx + 1}. <b>${escapeHtml(t.artist)}</b> — ${escapeHtml(t.title)}`
+        ).join('\n');
+
+        const moreText = failedTracks.length > 30 ? `\n\n<i>... and ${failedTracks.length - 30} more.</i>` : '';
+        const reportText = header + trackLines + moreText;
+
+        try {
+          await ctx.reply(reportText, { parse_mode: 'HTML' });
+        } catch (repErr) {
+          logger.warn(`Failed sending playlist summary report: ${repErr.message}`);
+        }
+
+        try {
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            statusMessageId,
+            null,
+            `⚠️ Playlist finished. ${completedCount} sent, ${failedTracks.length} skipped.`
+          );
+          setTimeout(() => {
+            ctx.telegram.deleteMessage(ctx.chat.id, statusMessageId).catch(() => {});
+          }, 15000);
+        } catch {}
+      }
 
       if (originalMessageId) {
         try {
@@ -476,6 +625,26 @@ class SpotifyStrategy extends BaseStrategy {
       logger.info(`Spotify playlist "${entity.title}" completed (${completedCount} sent, ${failedCount} failed)`);
     } finally {
       this.activePlaylists.delete(statusMessageId);
+      // If cancelled, clean up any prepared results
+      if (playlistSignal.aborted) {
+        for (let i = 0; i < total; i++) {
+          try {
+            const outcome = await Promise.race([
+              trackPromises[i],
+              Promise.resolve(null)
+            ]);
+            if (outcome?.result?.cleanup) {
+              await outcome.result.cleanup().catch(() => {});
+            }
+          } catch {}
+        }
+      }
+      if (workerWakeup) {
+        const wake = workerWakeup;
+        workerWakeup = null;
+        wake();
+      }
+      await Promise.allSettled(workers);
     }
   }
 
@@ -503,7 +672,13 @@ class SpotifyStrategy extends BaseStrategy {
 
       active.abortController.abort();
       this.activePlaylists.delete(msgId);
-      return { statusMessageId: msgId, active };
+      return {
+        statusMessageId: msgId,
+        title: active.title,
+        total: active.total,
+        getCompletedCount: active.getCompletedCount,
+        active
+      };
     }
     return null;
   }
@@ -534,6 +709,77 @@ class SpotifyStrategy extends BaseStrategy {
       return { messageId: msgId, pending };
     }
     return null;
+  }
+
+  /**
+   * Spotify-specific user-friendly error formatting.
+   * @param {object} ctx
+   * @param {number} statusMessageId
+   * @param {Error} error
+   * @param {string} userInfo
+   */
+  async sendErrorMessage(ctx, statusMessageId, error, userInfo) {
+    if (error?.message === 'DOWNLOAD_CANCELLED' || error?.name === 'AbortError') {
+      logger.info(`Spotify request cancelled for ${userInfo}`);
+      return;
+    }
+
+    logger.error(`Spotify request failed for ${userInfo}: ${error.message}`);
+
+    const rawMsg = error.message || '';
+    let title = 'Spotify request failed';
+    const tips = [];
+
+    if (rawMsg.includes('not found') || rawMsg.includes('private') || rawMsg.includes('404')) {
+      if (rawMsg.includes('playlist')) {
+        title = 'Spotify playlist not found or is private';
+        tips.push('Make sure the playlist is <b>Public</b> (in Spotify: tap <b>···</b> ➔ <b>Make Public</b>)');
+        tips.push('Private, secret, or invite-only playlists cannot be accessed by the bot');
+        tips.push('Ensure the link is valid and has not expired');
+      } else if (rawMsg.includes('album')) {
+        title = 'Spotify album not found or is unavailable';
+        tips.push('The album may be unreleased, removed, or region-restricted');
+        tips.push('Ensure the link is valid');
+      } else {
+        title = 'Spotify track not found or is unavailable';
+        tips.push('The track may be region-restricted or removed from Spotify');
+        tips.push('Ensure the link is valid');
+      }
+    } else if (rawMsg.includes('No available audio streams') || rawMsg.includes('EMPTY_AUDIO_FILE')) {
+      title = 'Could not find a downloadable audio match';
+      tips.push('No matching audio stream was found for this track');
+      tips.push('Try searching for the song directly with /song <title>');
+    } else {
+      title = 'Failed to load Spotify media';
+      const cleanErr = rawMsg.replace(/[_*[\]`~>#+\-=|{}.!()\\]/g, ' ').trim();
+      if (cleanErr) tips.push(escapeHtml(cleanErr));
+      tips.push('Please verify the link and try again in a few moments');
+    }
+
+    const tipsText = tips.map(t => `• ${t}`).join('\n');
+    const messageText = `❌ <b>${title}</b>\n\n💡 <b>Troubleshooting:</b>\n${tipsText}`;
+
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMessageId,
+        null,
+        messageText,
+        { parse_mode: 'HTML' }
+      );
+    } catch {
+      try {
+        const plainText = messageText.replace(/<[^>]*>/g, '');
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          statusMessageId,
+          null,
+          plainText
+        );
+      } catch (finalErr) {
+        logger.error(`Failed to send Spotify error text to ${userInfo}: ${finalErr.message}`);
+      }
+    }
   }
 }
 

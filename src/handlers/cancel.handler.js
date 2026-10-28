@@ -1,7 +1,7 @@
 const queueService = require('../services/queue.service');
 const { youtubeStrategy, spotifyStrategy } = require('./download');
 const { cancelPendingSearch } = require('./search.handler');
-const { isAdmin, getUserInfo } = require('../utils/helpers');
+const { isAdmin, getUserInfo, escapeHtml } = require('../utils/helpers');
 const logger = require('../utils/logger');
 
 /**
@@ -42,12 +42,24 @@ async function handleCancel(ctx) {
       await ctx.deleteMessage();
     } catch {}
 
+    const title = spotActiveResult.title || 'Playlist';
+    const sentCount = typeof spotActiveResult.getCompletedCount === 'function'
+      ? spotActiveResult.getCompletedCount()
+      : (spotActiveResult.completedCount || 0);
+    const totalCount = spotActiveResult.total || 0;
+
+    const cancelMsg = [
+      `🛑 <b>Playlist download cancelled: ${escapeHtml(title)}</b>`,
+      totalCount > 0 ? `Sent <b>${sentCount}/${totalCount}</b> tracks before cancellation.` : 'No tracks were sent.'
+    ].join('\n');
+
     try {
-      await ctx.telegram.editMessageText(chatId, spotActiveResult.statusMessageId, null, '❌ Download cancelled.');
-      setTimeout(() => {
-        ctx.telegram.deleteMessage(chatId, spotActiveResult.statusMessageId).catch(() => {});
-      }, 3000);
-    } catch {}
+      await ctx.telegram.editMessageText(chatId, spotActiveResult.statusMessageId, null, cancelMsg, { parse_mode: 'HTML' });
+    } catch {
+      try {
+        await ctx.reply(cancelMsg, { parse_mode: 'HTML' });
+      } catch {}
+    }
 
     return;
   }

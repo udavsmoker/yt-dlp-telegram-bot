@@ -32,7 +32,8 @@ module.exports = {
   spotify: {
     clientId: process.env.SPOTIFY_CLIENT_ID || null,
     clientSecret: process.env.SPOTIFY_CLIENT_SECRET || null,
-    maxTracks: parseInt(process.env.SPOTIFY_MAX_TRACKS || '1000', 10)
+    maxTracks: parseInt(process.env.SPOTIFY_MAX_TRACKS || '1000', 10),
+    concurrency: parseInt(process.env.SPOTIFY_CONCURRENCY || '3', 10)
   }
 };
 

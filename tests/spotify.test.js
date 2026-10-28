@@ -250,4 +250,180 @@ describe('Spotify Service & Strategy', () => {
       assert.equal(scored[0].id, 'exact_indie');
     });
   });
+
+  describe('SpotifyService Pagination (>100 tracks)', () => {
+    it('should paginate and retrieve all tracks when playlist exceeds 100 tracks in Pathfinder', async () => {
+      const service = new spotifyService.SpotifyService();
+
+      // Mock axios get to simulate Pathfinder pagination
+      const originalGet = require('axios').get;
+      const axios = require('axios');
+
+      let callCount = 0;
+      axios.get = async (url) => {
+        callCount++;
+        const parsed = new URL(url);
+        const variables = JSON.parse(parsed.searchParams.get('variables'));
+
+        if (variables.offset === 0) {
+          // Return first 100 tracks
+          const items = Array.from({ length: 100 }, (_, i) => ({
+            itemV2: {
+              data: {
+                __typename: 'Track',
+                uri: `spotify:track:track_id_${i + 1}`,
+                name: `Song ${i + 1}`,
+                artists: { items: [{ profile: { name: 'Artist X' } }] },
+                albumOfTrack: { name: 'Album X', coverArt: { sources: [{ url: 'https://cdn.spotify.com/art.jpg' }] } },
+                trackDuration: { totalMilliseconds: 180000 }
+              }
+            }
+          }));
+
+          return {
+            status: 200,
+            data: {
+              data: {
+                playlistV2: {
+                  name: 'Mega Playlist',
+                  ownerV2: { data: { name: 'Curator X' } },
+                  images: { items: [{ sources: [{ url: 'https://cdn.spotify.com/playlist.jpg' }] }] },
+                  content: {
+                    totalCount: 165,
+                    items
+                  }
+                }
+              }
+            }
+          };
+        } else if (variables.offset === 100) {
+          // Return remaining 65 tracks
+          const items = Array.from({ length: 65 }, (_, i) => ({
+            itemV2: {
+              data: {
+                __typename: 'Track',
+                uri: `spotify:track:track_id_${101 + i}`,
+                name: `Song ${101 + i}`,
+                artists: { items: [{ profile: { name: 'Artist Y' } }] },
+                albumOfTrack: { name: 'Album Y', coverArt: { sources: [{ url: 'https://cdn.spotify.com/art2.jpg' }] } },
+                trackDuration: { totalMilliseconds: 200000 }
+              }
+            }
+          }));
+
+          return {
+            status: 200,
+            data: {
+              data: {
+                playlistV2: {
+                  name: 'Mega Playlist',
+                  ownerV2: { data: { name: 'Curator X' } },
+                  content: {
+                    totalCount: 165,
+                    items
+                  }
+                }
+              }
+            }
+          };
+        }
+        return { data: { data: { playlistV2: { content: { items: [], totalCount: 165 } } } } };
+      };
+
+      try {
+        const result = await service.fetchPathfinderPlaylist('mock_pl', 'mock_token');
+        assert.equal(result.title, 'Mega Playlist');
+        assert.equal(result.curator, 'Curator X');
+        assert.equal(result.totalTracks, 165);
+        assert.equal(result.tracks.length, 165);
+        assert.equal(result.tracks[0].title, 'Song 1');
+        assert.equal(result.tracks[100].title, 'Song 101');
+        assert.equal(result.tracks[164].title, 'Song 165');
+        assert.equal(callCount, 2);
+      } finally {
+        axios.get = originalGet;
+      }
+    });
+
+    it('should paginate and retrieve all tracks when album exceeds 50 tracks in Pathfinder', async () => {
+      const service = new spotifyService.SpotifyService();
+
+      const originalGet = require('axios').get;
+      const axios = require('axios');
+
+      let callCount = 0;
+      axios.get = async (url) => {
+        callCount++;
+        const parsed = new URL(url);
+        const variables = JSON.parse(parsed.searchParams.get('variables'));
+
+        const count = variables.offset === 0 ? 50 : 25;
+        const items = Array.from({ length: count }, (_, i) => ({
+          track: {
+            uri: `spotify:track:album_track_${variables.offset + i + 1}`,
+            name: `Track ${variables.offset + i + 1}`,
+            artists: { items: [{ profile: { name: 'Album Artist' } }] },
+            duration: { totalMilliseconds: 150000 },
+            trackNumber: variables.offset + i + 1
+          }
+        }));
+
+        return {
+          status: 200,
+          data: {
+            data: {
+              albumUnion: {
+                name: 'Massive Box Set',
+                artists: { items: [{ profile: { name: 'Album Artist' } }] },
+                coverArt: { sources: [{ url: 'https://cdn.spotify.com/album_cover.jpg' }] },
+                tracksV2: {
+                  totalCount: 75,
+                  items
+                }
+              }
+            }
+          }
+        };
+      };
+
+      try {
+        const result = await service.fetchPathfinderAlbum('mock_album', 'mock_token');
+        assert.equal(result.title, 'Massive Box Set');
+        assert.equal(result.totalTracks, 75);
+        assert.equal(result.tracks.length, 75);
+        assert.equal(result.tracks[0].title, 'Track 1');
+        assert.equal(result.tracks[74].title, 'Track 75');
+        assert.equal(callCount, 2);
+      } finally {
+        axios.get = originalGet;
+      }
+    });
+
+    it('should fall back to embed metadata if Pathfinder fails', async () => {
+      const service = new spotifyService.SpotifyService();
+
+      service.getClientCredentialsToken = async () => null;
+      service.getAnonymousToken = async () => 'mock_token';
+      service.fetchPathfinderPlaylist = async () => {
+        throw new Error('Pathfinder Network Error');
+      };
+
+      let embedFallbackCalled = false;
+      service.getPlaylistEmbedFallback = async (id) => {
+        embedFallbackCalled = true;
+        return {
+          id,
+          title: 'Fallback Playlist',
+          curator: 'Spotify',
+          coverUrl: null,
+          totalTracks: 50,
+          tracks: []
+        };
+      };
+
+      const result = await service.getPlaylist('fallback_test');
+      assert.equal(embedFallbackCalled, true);
+      assert.equal(result.title, 'Fallback Playlist');
+    });
+  });
 });

@@ -1,5 +1,6 @@
 const queueService = require('../services/queue.service');
 const { youtubeStrategy, spotifyStrategy } = require('./download');
+const { cancelPendingSearch } = require('./search.handler');
 const { isAdmin, getUserInfo } = require('../utils/helpers');
 const logger = require('../utils/logger');
 
@@ -133,7 +134,29 @@ async function handleCancel(ctx) {
     }
   }
 
-  // 4. Nothing found to cancel
+  // 4. Try cancelling pending song search prompt
+  const searchResult = cancelPendingSearch(chatId, targetMessageId, userId, isChatAdmin);
+  if (searchResult && searchResult.unauthorized) {
+    return ctx.reply('⚠️ You can only cancel your own requests. Ask a chat admin to cancel it.');
+  }
+  if (searchResult && searchResult.messageId) {
+    try {
+      await ctx.telegram.deleteMessage(chatId, searchResult.messageId);
+    } catch {}
+    try {
+      await ctx.deleteMessage();
+    } catch {}
+
+    try {
+      const confirmation = await ctx.reply('❌ Search cancelled.');
+      setTimeout(() => {
+        ctx.telegram.deleteMessage(chatId, confirmation.message_id).catch(() => {});
+      }, 3000);
+    } catch {}
+    return;
+  }
+
+  // 5. Nothing found to cancel
   return ctx.reply('⚠️ No active downloads to cancel.');
 }
 

@@ -28,6 +28,11 @@ module.exports = {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
     maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '30', 10),
     downloadMaxRequests: parseInt(process.env.DOWNLOAD_RATE_LIMIT_MAX || '5', 10)
+  },
+  spotify: {
+    clientId: process.env.SPOTIFY_CLIENT_ID || null,
+    clientSecret: process.env.SPOTIFY_CLIENT_SECRET || null,
+    maxTracks: parseInt(process.env.SPOTIFY_MAX_TRACKS || '1000', 10)
   }
 };
 

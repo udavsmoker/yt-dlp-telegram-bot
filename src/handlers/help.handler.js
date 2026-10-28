@@ -17,6 +17,7 @@ async function handleHelp(ctx) {
 /cancel - cancel active or queued download
 /undo - delete last sent media (or reply to it)
 /mp3 - extract audio from a replied video
+/song <title> - search and download any song directly (aliases: /music, /track, /search)
 /settings - chat settings (Admins)
 /botstats - view AI stats
 
@@ -34,6 +35,7 @@ async function handleHelp(ctx) {
 *Usage:*
 • Send a video link (YouTube, TikTok, Instagram, Bluesky, etc.)
 • Send a Spotify link (track, album, playlist) for 320 kbps MP3s with album art
+• Search music: send /song <title> or type the song title in private chat
 Max size: ${maxSize}.
   `;
   

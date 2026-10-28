@@ -18,6 +18,7 @@ const { handleBlacklist } = require('./handlers/blacklist.handler');
 const { handleHealth } = require('./handlers/health.handler');
 const handleUndo = require('./handlers/undo.handler');
 const handleCancel = require('./handlers/cancel.handler');
+const { handleSearchCommand, handleSearchCallback } = require('./handlers/search.handler');
 const settingsService = require('./services/settings.service');
 const memeService = require('./services/meme.service');
 const demotivatorService = require('./services/demotivator.service');
@@ -87,6 +88,7 @@ bot.command('health', handleHealth);
 bot.command('ping', handleHealth);
 bot.command('undo', handleUndo);
 bot.command('cancel', handleCancel);
+bot.command(['music', 'song', 'track', 'find', 'search'], handleSearchCommand);
 
 bot.action(/^toggle_/, handleSettingsCallback);
 bot.action('settings_close', handleSettingsCallback);
@@ -101,6 +103,10 @@ bot.action('insta_all', handleInstagramCallback);
 
 // Spotify playlist/album confirmation callbacks
 bot.action(['spot_download', 'spot_cancel'], handleSpotifyCallback);
+
+// Song search selection and cancellation callbacks
+bot.action(/^s_dl_/, handleSearchCallback);
+bot.action(/^s_cancel_/, handleSearchCallback);
 
 bot.on(message('text'), handleDownload);
 bot.on('channel_post', (ctx, next) => {

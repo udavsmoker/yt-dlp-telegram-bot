@@ -55,6 +55,11 @@ async function handleDownload(ctx, next) {
   const url = extractUrl(messageText);
 
   if (!url || !isValidVideoUrl(url)) {
+    // In private chat, non-command text queries automatically search for songs
+    if (ctx.chat?.type === 'private' && !messageText.startsWith('/') && messageText.trim().length >= 2) {
+      const { handleSearchCommand } = require('../search.handler');
+      return handleSearchCommand(ctx, messageText.trim());
+    }
     return next();
   }
 

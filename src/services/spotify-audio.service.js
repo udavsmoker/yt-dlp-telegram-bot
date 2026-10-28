@@ -157,6 +157,57 @@ class SpotifyAudioService {
   }
 
   /**
+   * Search YouTube directly for audio tracks matching a query.
+   * @param {string} query
+   * @param {number} [limit=5]
+   * @param {object} [options={}]
+   * @returns {Promise<Array<object>>}
+   */
+  async searchYouTubeTracks(query, limit = 5, options = {}) {
+    const cleanQuery = (query || '').replace(/['"“”«»]/g, '').trim();
+    const ytdlpPath = process.env.YTDLP_PATH || '/home/udav/.local/bin/yt-dlp';
+
+    try {
+      const { stdout } = await execFileAsync(ytdlpPath, [
+        '--flat-playlist',
+        '--print', '%(id)s\t%(title)s\t%(uploader)s\t%(duration)s',
+        `ytsearch${limit}:${cleanQuery}`
+      ], {
+        signal: options.signal,
+        timeout: 15000
+      });
+
+      const lines = stdout.trim().split('\n').filter(Boolean);
+      const results = [];
+
+      for (const line of lines) {
+        const parts = line.split('\t');
+        if (parts.length >= 2) {
+          const id = parts[0].trim();
+          const title = parts[1].trim();
+          const uploader = parts[2] ? parts[2].trim() : 'YouTube';
+          const duration = parts[3] ? parseFloat(parts[3]) : 0;
+          results.push({
+            id: `yt_${id}`,
+            youtubeId: id,
+            title,
+            artist: uploader,
+            artists: [uploader],
+            album: title,
+            durationMs: Math.round(duration * 1000),
+            coverUrl: null,
+            releaseDate: null
+          });
+        }
+      }
+      return results;
+    } catch (err) {
+      logger.warn(`YouTube fallback search failed for "${query}": ${err.message}`);
+      return [];
+    }
+  }
+
+  /**
    * Search, download, tag, and prepare a Spotify track as a high-quality MP3.
    * @param {object} track - { id, title, artist, album, durationMs, coverUrl, trackNumber, releaseDate }
    * @param {object} options - { signal, onProgress }
@@ -207,7 +258,9 @@ class SpotifyAudioService {
 
       // 2. Resolve best YouTube audio stream
       logger.info(`Searching audio for Spotify track "${track.title}" by "${track.artist}"`);
-      const bestMatch = await this.findBestYouTubeMatch(track, options);
+      const bestMatch = track.youtubeId
+        ? { id: track.youtubeId }
+        : await this.findBestYouTubeMatch(track, options);
 
       const downloadTarget = bestMatch?.id
         ? `https://www.youtube.com/watch?v=${bestMatch.id}`

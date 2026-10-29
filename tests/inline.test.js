@@ -41,9 +41,11 @@ describe('Inline Mode Service & Handlers', () => {
       assert.equal(results[0].type, 'video');
       assert.equal(results[0].video_file_id, 'BAADBAAD_TEST_VIDEO_FILE_ID');
       assert.equal(results[0].title, 'Hilarious Cat Video');
+      assert.equal(results[0].caption, '👤 <b>@CatCreator</b>');
+      assert.equal(results[0].reply_markup.inline_keyboard[0][0].text, '↗️');
     });
 
-    it('should return instant cached audio result when music URL is in SQLite cache', async () => {
+    it('should return instant cached audio result when music URL is in SQLite cache without duplicate caption', async () => {
       const testUrl = 'https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT';
       cacheService.set(testUrl, {
         fileId: 'CQACAgIAAxkBAAI_AUDIO_FILE_ID',
@@ -60,6 +62,7 @@ describe('Inline Mode Service & Handlers', () => {
       assert.equal(results[0].audio_file_id, 'CQACAgIAAxkBAAI_AUDIO_FILE_ID');
       assert.equal(results[0].title, 'Numb');
       assert.equal(results[0].performer, 'Linkin Park');
+      assert.equal(results[0].caption, undefined);
     });
 
     it('should provide download article with short token for uncached generic URL', async () => {

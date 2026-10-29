@@ -495,8 +495,21 @@ function getYtdlpPath() {
   return 'yt-dlp';
 }
 
+/**
+ * Format numbers compactly with K/M suffixes (e.g. 29.9K, 1.2M).
+ * @param {number} num
+ * @returns {string}
+ */
+function formatCount(num) {
+  if (!num || isNaN(num) || num <= 0) return '0';
+  if (num >= 1000000) return (num / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (num >= 1000) return (num / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+  return String(num);
+}
+
 module.exports = {
   getYtdlpPath,
+  formatCount,
   escapeHtml,
   extractUrl,
   ensureDir,

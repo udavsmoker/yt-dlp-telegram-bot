@@ -3,7 +3,7 @@ const cacheService = require('./cache.service');
 const spotifyAudioService = require('./spotify-audio.service');
 const spotifyService = require('./spotify.service');
 const logger = require('../utils/logger');
-const { escapeHtml, formatDuration, isTikTokUrl, isYouTubeUrl, isInstagramUrl } = require('../utils/helpers');
+const { escapeHtml, formatDuration, isTikTokUrl, isYouTubeUrl, isInstagramUrl, formatCount } = require('../utils/helpers');
 
 class InlineService {
   constructor() {
@@ -167,14 +167,23 @@ class InlineService {
     const cached = cacheService.get(normalizedUrl);
     if (cached && cached.file_id) {
       if (cached.file_type === 'video') {
+        const cleanAuthor = cached.author ? cached.author.replace(/^@/, '') : '';
+        const caption = cleanAuthor ? `👤 <b>@${escapeHtml(cleanAuthor)}</b>` : undefined;
+        const targetUrl = cached.original_url || cached.normalized_url || url;
         results.push({
           type: 'video',
           id: `cache_vid_${cached.id}`,
           video_file_id: cached.file_id,
           title: cached.title || 'Cached Video',
           description: `⚡ Instant Video • ${cached.author || 'Ready'}`,
-          caption: `📹 <b>${escapeHtml(cached.title || 'Video')}</b>\nvia @${botUsername}`,
-          parse_mode: 'HTML'
+          ...(caption ? { caption, parse_mode: 'HTML' } : {}),
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '↗️', url: targetUrl }
+              ]
+            ]
+          }
         });
         return results;
       }
@@ -184,9 +193,7 @@ class InlineService {
           id: `cache_aud_${cached.id}`,
           audio_file_id: cached.file_id,
           title: cached.title || 'Cached Audio',
-          performer: cached.author || 'Music',
-          caption: `🎵 <b>${escapeHtml(cached.title || 'Audio')}</b> — <i>${escapeHtml(cached.author || 'Music')}</i>\nvia @${botUsername}`,
-          parse_mode: 'HTML'
+          performer: cached.author || 'Music'
         });
         return results;
       }
@@ -209,6 +216,7 @@ class InlineService {
         if (data) {
           const title = (data.title || 'TikTok Media').substring(0, 100);
           const author = data.author?.nickname || data.author?.unique_id || 'TikTok';
+          const cleanAuthor = author.replace(/^@/, '');
 
           // A. Photo Slideshow post: return photos and original audio
           if (data.images && Array.isArray(data.images) && data.images.length > 0) {
@@ -220,12 +228,19 @@ class InlineService {
                 photo_url: data.images[i],
                 thumbnail_url: data.images[i],
                 title: `Photo ${i + 1}/${data.images.length}`,
-                caption: `📸 <b>${escapeHtml(title)}</b> (${i + 1}/${data.images.length})\n👤 <i>@${escapeHtml(author)}</i>\nvia @${botUsername}`,
-                parse_mode: 'HTML'
+                caption: `👤 <b>@${escapeHtml(cleanAuthor)}</b> (${i + 1}/${data.images.length})`,
+                parse_mode: 'HTML',
+                reply_markup: {
+                  inline_keyboard: [
+                    [
+                      { text: '↗️', url }
+                    ]
+                  ]
+                }
               });
             }
 
-            // Also attach background audio if available
+            // Also attach background audio if available (clean, no duplicate caption)
             const musicUrl = data.music_info?.play || data.music || data.play;
             if (musicUrl) {
               results.push({
@@ -233,9 +248,7 @@ class InlineService {
                 id: `tt_aud_${shortId}`,
                 audio_url: musicUrl,
                 title: data.music_info?.title || `${title} (Sound)`,
-                performer: data.music_info?.author || author,
-                caption: `🎵 <b>${escapeHtml(data.music_info?.title || title)}</b>\n👤 <i>@${escapeHtml(author)}</i>\nvia @${botUsername}`,
-                parse_mode: 'HTML'
+                performer: data.music_info?.author || author
               });
             }
             return results;
@@ -245,6 +258,19 @@ class InlineService {
           const videoUrl = data.hdplay || data.play;
           if (videoUrl) {
             const shortId = this.createShortLink(url);
+            const buttons = [];
+            if (data.digg_count !== undefined && data.comment_count !== undefined) {
+              buttons.push([
+                { text: `❤️ ${formatCount(data.digg_count)}`, url },
+                { text: `💬 ${formatCount(data.comment_count)}`, url },
+                { text: '↗️', url }
+              ]);
+            } else {
+              buttons.push([
+                { text: '↗️', url }
+              ]);
+            }
+
             results.push({
               type: 'video',
               id: `tt_vid_${shortId}`,
@@ -253,8 +279,11 @@ class InlineService {
               thumbnail_url: data.cover || 'https://cdn-icons-png.flaticon.com/128/3046/3046121.png',
               title: title,
               description: `@${author} • TikTok HD (1080p)`,
-              caption: `📹 <b>${escapeHtml(title)}</b>\n👤 <i>@${escapeHtml(author)}</i>\nvia @${botUsername}`,
-              parse_mode: 'HTML'
+              caption: `👤 <b>@${escapeHtml(cleanAuthor)}</b>`,
+              parse_mode: 'HTML',
+              reply_markup: {
+                inline_keyboard: buttons
+              }
             });
             return results;
           }
@@ -457,15 +486,13 @@ class InlineService {
       const cached = cacheService.get(cacheService.normalizeUrl(ytUrl));
 
       if (cached && cached.file_id && cached.file_type === 'audio') {
-        // Instant audio result from 30-day SQLite cache
+        // Instant audio result from 30-day SQLite cache (clean, no duplicate caption)
         results.push({
           type: 'audio',
           id: `aud_cache_${track.youtubeId}`,
           audio_file_id: cached.file_id,
           title: track.title,
-          performer: track.artist,
-          caption: `🎵 <b>${escapeHtml(track.title)}</b> — <i>${escapeHtml(track.artist)}</i>\nvia @${botUsername}`,
-          parse_mode: 'HTML'
+          performer: track.artist
         });
       } else {
         // Candidate article that triggers automatic download on tap via chosen_inline_result

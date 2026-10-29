@@ -6,7 +6,7 @@ const videoService = require('../services/video.service');
 const cacheService = require('../services/cache.service');
 const config = require('../config');
 const logger = require('../utils/logger');
-const { getFileForTelegram, cleanupFile, escapeHtml, getUserInfo } = require('../utils/helpers');
+const { getFileForTelegram, cleanupFile, escapeHtml, getUserInfo, formatCount } = require('../utils/helpers');
 
 /**
  * Handle incoming Telegram inline queries (@bot <query>).
@@ -169,14 +169,12 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
     }
 
     if (fileId) {
-      // Replace the inline placeholder message with native Telegram audio player
+      // Replace the inline placeholder message with native Telegram audio player (clean, no duplicate caption)
       await ctx.telegram.editMessageMedia(
         undefined, undefined, inlineMessageId,
         {
           type: 'audio',
-          media: fileId,
-          caption: `🎵 <b>${escapeHtml(result.title)}</b> — <i>${escapeHtml(result.artist)}</i>`,
-          parse_mode: 'HTML'
+          media: fileId
         }
       );
 
@@ -290,13 +288,36 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
     }
 
     if (fileId && inlineMessageId) {
+      const rawAuthor = result.info?.uploader || result.info?.channel || result.info?.creator || result.info?.author || '';
+      const cleanAuthor = rawAuthor.replace(/^@/, '').trim();
+      const caption = cleanAuthor ? `👤 <b>@${escapeHtml(cleanAuthor)}</b>` : undefined;
+
+      // Inline buttons like SavX: like count, comment count, and link to video
+      const buttons = [];
+      const likes = result.info?.like_count;
+      const comments = result.info?.comment_count;
+      if (likes !== undefined && likes !== null && likes > 0) {
+        const row = [{ text: `❤️ ${formatCount(likes)}`, url }];
+        if (comments !== undefined && comments !== null && comments > 0) {
+          row.push({ text: `💬 ${formatCount(comments)}`, url });
+        }
+        row.push({ text: '↗️', url });
+        buttons.push(row);
+      } else {
+        buttons.push([{ text: '↗️', url }]);
+      }
+
       await ctx.telegram.editMessageMedia(
         undefined, undefined, inlineMessageId,
         {
           type: 'video',
           media: fileId,
-          caption: `📹 <b>${escapeHtml(result.info?.title || 'Video')}</b>`,
-          parse_mode: 'HTML'
+          ...(caption ? { caption, parse_mode: 'HTML' } : {})
+        },
+        {
+          reply_markup: {
+            inline_keyboard: buttons
+          }
         }
       );
 

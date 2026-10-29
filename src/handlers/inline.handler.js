@@ -189,7 +189,7 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
       await ctx.telegram.editMessageReplyMarkup(undefined, undefined, inlineMessageId, {
         inline_keyboard: [
           [
-            { text: '⏳ Скачивание 320k MP3...', callback_data: 'inline_wait:busy' }
+            { text: '⏳ Downloading 320k MP3...', callback_data: 'inline_wait:busy' }
           ]
         ]
       }).catch(() => {});
@@ -286,7 +286,7 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
       await ctx.telegram.editMessageReplyMarkup(undefined, undefined, inlineMessageId, {
         inline_keyboard: [
           [
-            { text: '⏳ Скачивание видео...', callback_data: 'inline_wait:busy' }
+            { text: '⏳ Downloading video...', callback_data: 'inline_wait:busy' }
           ]
         ]
       }).catch(() => {});
@@ -413,13 +413,13 @@ async function handleInlineDownloadCallback(ctx) {
   const targetId = data.replace(/^inline_(?:dl|wait):/, '');
 
   if (targetId === 'busy' || (inlineMessageId && activeInlineDownloads.has(inlineMessageId))) {
-    await ctx.answerCbQuery('⏳ Скачивание уже идет, подождите пару секунд...', {
+    await ctx.answerCbQuery('⏳ Download is already in progress, please wait...', {
       show_alert: false
     }).catch(() => {});
     return;
   }
 
-  await ctx.answerCbQuery('🚀 Начинаем скачивание медиа...', {
+  await ctx.answerCbQuery('🚀 Starting media download...', {
     show_alert: false
   }).catch(() => {});
 

@@ -324,7 +324,7 @@ class InlineService {
               reply_markup: {
                 inline_keyboard: [
                   [
-                    { text: '⬇️ Скачать (320 kbps MP3)', callback_data: `inline_dl:spot_${parsed.id}` }
+                    { text: '⬇️ Download (320 kbps MP3)', callback_data: `inline_dl:spot_${parsed.id}` }
                   ]
                 ]
               }
@@ -353,7 +353,7 @@ class InlineService {
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '⬇️ Скачать видео', callback_data: `inline_dl:ig_${shortToken}` }
+              { text: '⬇️ Download Video', callback_data: `inline_dl:ig_${shortToken}` }
             ]
           ]
         }
@@ -383,7 +383,7 @@ class InlineService {
           type: 'article',
           id: `yt_${shortToken}`,
           title: `⚡ ${title}`,
-          description: `${author} • YouTube Short • Нажмите для загрузки в чат`,
+          description: `${author} • YouTube Short • Tap to download to chat`,
           thumb_url: thumb,
           input_message_content: {
             message_text: `⏳ <b>Downloading Short:</b> ${escapeHtml(title)}...`,
@@ -392,7 +392,7 @@ class InlineService {
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '⬇️ Скачать Shorts в чат', callback_data: `inline_dl:yt_${shortToken}` }
+                { text: '⬇️ Download Shorts to chat', callback_data: `inline_dl:yt_${shortToken}` }
               ]
             ]
           }
@@ -403,20 +403,20 @@ class InlineService {
           type: 'article',
           id: `yt_pm_${shortToken}`,
           title: `🎬 ${title}`,
-          description: `${author} • Выбор качества в боте (1080p / 720p / MP3)`,
+          description: `${author} • Quality selector in bot (1080p / 720p / MP3)`,
           thumb_url: thumb,
           input_message_content: {
             message_text: (
               `🎬 <b>${escapeHtml(title)}</b>\n` +
               `👤 <i>${escapeHtml(author)}</i>\n\n` +
-              `<i>Нажмите кнопку ниже, чтобы выбрать качество видео (1080p, 720p, 480p или MP3) в боте:</i>`
+              `<i>Tap the button below to choose video quality (1080p, 720p, 480p or MP3) in bot:</i>`
             ),
             parse_mode: 'HTML'
           },
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '🚀 Скачать в боте (1080p / 720p / MP3)', url: `https://t.me/${botUsername}?start=${shortToken}` }
+                { text: '🚀 Download in Bot (1080p / 720p / MP3)', url: `https://t.me/${botUsername}?start=${shortToken}` }
               ]
             ]
           }
@@ -426,8 +426,8 @@ class InlineService {
         results.push({
           type: 'article',
           id: `yt_${shortToken}`,
-          title: `⚡ Скачать прямо в чат: ${title}`,
-          description: `${author} • Загрузка видео в этот чат`,
+          title: `⚡ Download to chat: ${title}`,
+          description: `${author} • Download video directly into this chat`,
           thumb_url: thumb,
           input_message_content: {
             message_text: `⏳ <b>Downloading:</b> ${escapeHtml(title)}...`,
@@ -436,7 +436,7 @@ class InlineService {
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '⬇️ Скачать видео в этот чат', callback_data: `inline_dl:yt_${shortToken}` }
+                { text: '⬇️ Download video to this chat', callback_data: `inline_dl:yt_${shortToken}` }
               ]
             ]
           }
@@ -461,7 +461,7 @@ class InlineService {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: '⬇️ Скачать медиа', callback_data: `inline_dl:gen_${shortToken}` }
+            { text: '⬇️ Download Media', callback_data: `inline_dl:gen_${shortToken}` }
           ]
         ]
       }
@@ -531,7 +531,7 @@ class InlineService {
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '⬇️ Скачать (320 kbps MP3)', callback_data: `inline_dl:${resultKey}` }
+                { text: '⬇️ Download (320 kbps MP3)', callback_data: `inline_dl:${resultKey}` }
               ]
             ]
           }

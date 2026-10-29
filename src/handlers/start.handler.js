@@ -4,17 +4,30 @@ const { getUserInfo } = require('../utils/helpers');
 async function handleStart(ctx) {
   const userInfo = getUserInfo(ctx);
   logger.info(`Start command from ${userInfo}`);
-  
-  const welcomeMessage = `
-Hi. I'm a video downloader bot.
 
-Send me a link from YouTube, TikTok, Instagram, Twitter, Reddit, or elsewhere, and I'll download it.
-Use /help to see available commands.
-  `;
-  
-  await ctx.reply(welcomeMessage, { 
-    parse_mode: 'Markdown',
-    disable_web_page_preview: true 
+  const isLocal = ctx.telegram.options?.apiRoot?.includes('localhost');
+  const maxSize = isLocal ? '2000MB' : '50MB';
+
+  const welcomeMessage = `👋 <b>Welcome to Media & Music Downloader Bot!</b>
+
+Send me any supported link, and I will deliver the highest quality media directly to Telegram.
+
+📥 <b>Supported Features:</b>
+• <b>Videos:</b> YouTube, TikTok, Instagram (Reels, Posts, Carousels), X/Twitter, Bluesky, Reddit, and more (up to ${maxSize})
+• <b>Spotify Music:</b> Tracks, Albums, and Playlists in 320 kbps MP3 with embedded album art and ID3 metadata
+• <b>Song Search:</b> Type any song title in private chat or use <code>/song &lt;title&gt;</code>
+• <b>Audio Extraction:</b> Reply to any video with <code>/mp3</code> to convert it to audio
+
+⚡ <b>Quick Controls:</b>
+• <code>/cancel</code> — Stop active or queued downloads
+• <code>/undo</code> — Delete recently sent media
+• <code>/help</code> — View full command list and settings
+
+<i>Just send a link or song name to get started!</i>`;
+
+  await ctx.reply(welcomeMessage, {
+    parse_mode: 'HTML',
+    disable_web_page_preview: true
   });
 }
 

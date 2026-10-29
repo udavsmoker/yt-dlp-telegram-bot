@@ -240,7 +240,7 @@ class InstagramService {
                 'Referer': 'https://www.instagram.com/'
               },
               timeout: mediaType === 'video' ? 60000 : 30000,
-              maxContentLength: 50 * 1024 * 1024,
+              maxContentLength: (config.download?.maxFileSizeMB || 50) * 1024 * 1024,
               onDownloadProgress: makeProgressHandler()
             });
           } catch (proxyErr) {
@@ -256,7 +256,7 @@ class InstagramService {
                   'Referer': 'https://www.instagram.com/'
                 },
                 timeout: mediaType === 'video' ? 60000 : 30000,
-                maxContentLength: 50 * 1024 * 1024,
+                maxContentLength: (config.download?.maxFileSizeMB || 50) * 1024 * 1024,
                 onDownloadProgress: makeProgressHandler()
               });
             } else {

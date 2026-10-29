@@ -66,7 +66,7 @@ class DemotivatorService {
         } else {
           // Official Telegram API - download from CDN
           const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
-          logger.debug(`Downloading photo from Telegram CDN: ${fileUrl}`);
+          logger.debug(`Downloading photo from Telegram CDN: ${file.file_path}`);
           const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
           photoBuffer = response.data;
         }

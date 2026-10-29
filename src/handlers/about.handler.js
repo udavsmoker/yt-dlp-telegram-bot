@@ -4,36 +4,28 @@ const { getUserInfo } = require('../utils/helpers');
 async function handleAbout(ctx) {
   const userInfo = getUserInfo(ctx);
   logger.info(`About command from ${userInfo}`);
-  
-  const aboutMessage = `
-ℹ️ *About Video Downloader Bot*
 
-*Version:* 2.0.0 (yt-dlp powered)
+  const isLocal = ctx.telegram.options?.apiRoot?.includes('localhost');
+  const maxSize = isLocal ? '2000MB' : '50MB';
 
-This bot downloads videos using the powerful yt-dlp engine.
+  const aboutMessage = `ℹ️ <b>About Media & Music Downloader Bot</b>
 
-*Features:*
-• High-quality video downloads
-• Spotify track, album, and playlist downloading (320 kbps MP3 with cover art)
-• Automatic format selection
-• Fast and reliable
-• Free to use
+<b>Architecture & Engines:</b>
+• <b>Video Engine:</b> <code>yt-dlp</code> with specialized multi-platform fallback pipelines (TikTok API/slideshows, Instagram Graph/proxy, Bluesky AT Protocol)
+• <b>Music Pipeline:</b> YouTube Music Innertube search engine, yt-dlp audio extractor & FFmpeg audio transcoder
+• <b>Metadata Engine:</b> ID3v2.3 tagging with high-res embedded album artwork
+• <b>Queue & Delivery:</b> Concurrency-controlled sliding-window queue with throttled real-time progress bars
+• <b>Telegram Backend:</b> Local Telegram Bot API server (max payload: <b>${maxSize}</b>)
 
-*Technology:*
-• Node.js
-• Telegraf
-• yt-dlp
-• Winston
+<b>Privacy & Storage:</b>
+• Media files are strictly transient: processed in temporary storage and cleaned up immediately upon delivery
+• SQLite caching (WAL mode) only stores Telegram <code>file_id</code> handles for rapid re-sending without storing media files on disk
 
-*Privacy:*
-We don't store your videos. All downloads are temporary and deleted after sending.
+Made with ❤️ for Telegram`;
 
-Made with ❤️ for Telegram
-  `;
-  
-  await ctx.reply(aboutMessage, { 
-    parse_mode: 'Markdown',
-    disable_web_page_preview: true 
+  await ctx.reply(aboutMessage, {
+    parse_mode: 'HTML',
+    disable_web_page_preview: true
   });
 }
 

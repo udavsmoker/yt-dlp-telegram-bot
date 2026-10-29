@@ -34,11 +34,17 @@ async function tryServeFromCache(ctx, url, statusMessageId, originalMessageId, u
     if (cached.file_type === 'photo') {
       sentMsg = await ctx.replyWithPhoto(cached.file_id, { caption, parse_mode: 'HTML' });
     } else if (cached.file_type === 'audio') {
-      sentMsg = await ctx.replyWithAudio(cached.file_id, {
+      const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+      const audioOptions = {
         title: cached.title || undefined,
         performer: cached.author || undefined,
         duration: cached.duration ? parseInt(cached.duration, 10) : undefined
-      });
+      };
+      if (isGroup && sender?.caption) {
+        audioOptions.caption = `Sent by ${sender.caption}`;
+        audioOptions.parse_mode = 'HTML';
+      }
+      sentMsg = await ctx.replyWithAudio(cached.file_id, audioOptions);
     } else if (cached.file_type === 'video') {
       const videoOptions = {
         caption,
@@ -96,17 +102,20 @@ function cacheSentMedia(url, sentMessages, info = {}, meta = {}) {
       } else if (msg.photo && msg.photo.length > 0) {
         fileId = msg.photo[msg.photo.length - 1].file_id;
         fileType = 'photo';
+      } else if (msg.audio) {
+        fileId = msg.audio.file_id;
+        fileType = 'audio';
       }
 
       if (fileId) {
         cacheService.set(url, {
           fileId,
           fileType,
-          fileSize: meta.fileSize || info.fileSize,
+          fileSize: meta.fileSize || info.fileSize || (msg.audio ? msg.audio.file_size : undefined),
           platform: info.platform,
-          title: info.title,
-          author: info.author,
-          duration: info.duration,
+          title: info.title || (msg.audio ? msg.audio.title : undefined),
+          author: info.author || (msg.audio ? msg.audio.performer : undefined),
+          duration: info.duration || (msg.audio ? msg.audio.duration : undefined),
           quality: info.quality,
           width: meta.width || (msg.video ? msg.video.width : undefined),
           height: meta.height || (msg.video ? msg.video.height : undefined),

@@ -9,6 +9,7 @@ class CacheService {
   constructor(customDbPath = null) {
     this.enabled = config.cache?.enabled !== false;
     this.ttlMs = (config.cache?.ttlHours || 48) * 60 * 60 * 1000;
+    this.audioTtlMs = (config.cache?.audioTtlDays || 30) * 24 * 60 * 60 * 1000;
     this.db = null;
 
     if (this.enabled) {
@@ -66,7 +67,15 @@ class CacheService {
       `);
 
       this.stmtGet = this.db.prepare('SELECT * FROM video_cache WHERE url_hash = ? AND expires_at > ?');
-      this.stmtHit = this.db.prepare('UPDATE video_cache SET hit_count = hit_count + 1 WHERE id = ?');
+      this.stmtHit = this.db.prepare(`
+        UPDATE video_cache 
+        SET hit_count = hit_count + 1,
+            expires_at = CASE 
+              WHEN file_type = 'audio' THEN ? + ?
+              ELSE expires_at
+            END
+        WHERE id = ?
+      `);
       this.stmtSet = this.db.prepare(`
         INSERT INTO video_cache (
           url_hash, normalized_url, original_url, file_type, file_id,
@@ -161,6 +170,13 @@ class CacheService {
         return `https://bsky.app${pathname}`;
       }
 
+      if (hostname === 'open.spotify.com' || hostname === 'spotify.com') {
+        const match = pathname.match(/(?:intl-[a-z]+\/)?(track|album|playlist)\/([a-zA-Z0-9]+)/i);
+        if (match) {
+          return `https://open.spotify.com/${match[1].toLowerCase()}/${match[2]}`;
+        }
+      }
+
       // Generic cleanup: strip known tracking and telemetry parameters
       const trackingParams = [
         'si', 'obrf', 'feature', 'igsh', 'fbclid', 'gclid', 'ref', 'ref_src',
@@ -192,7 +208,7 @@ class CacheService {
       const row = this.stmtGet.get(hash, Date.now());
 
       if (row) {
-        this.stmtHit.run(row.id);
+        this.stmtHit.run(Date.now(), this.audioTtlMs, row.id);
         if (row.caption_info) {
           try {
             row.captionInfo = JSON.parse(row.caption_info);
@@ -215,6 +231,7 @@ class CacheService {
       const normalized = this.normalizeUrl(rawUrl);
       const hash = this.hashUrl(normalized);
       const now = Date.now();
+      const ttl = (data.fileType === 'audio') ? this.audioTtlMs : this.ttlMs;
 
       this.stmtSet.run({
         url_hash: hash,
@@ -232,7 +249,7 @@ class CacheService {
         height: data.height || null,
         caption_info: data.captionInfo ? JSON.stringify(data.captionInfo) : null,
         created_at: now,
-        expires_at: now + this.ttlMs
+        expires_at: now + ttl
       });
       return true;
     } catch (error) {

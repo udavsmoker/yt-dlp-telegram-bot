@@ -37,6 +37,11 @@ describe('CacheService (SQLite & URL Normalization)', () => {
       const normalized = cache.normalizeUrl('https://vimeo.com/123456?utm_source=telegram&utm_medium=social');
       assert.equal(normalized, 'https://vimeo.com/123456');
     });
+
+    it('should canonicalize Spotify URLs by stripping localized path and tracking query', () => {
+      const normalized = cache.normalizeUrl('https://open.spotify.com/intl-ru/track/4cOdK2wGLETKBW3PvgPWqT?si=abc123xyz&utm_source=copy-link');
+      assert.equal(normalized, 'https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT');
+    });
   });
 
   describe('Cache storage and retrieval', () => {
@@ -77,6 +82,25 @@ describe('CacheService (SQLite & URL Normalization)', () => {
       const record = cache.get(url); // reads 2, then increments to 3
 
       assert.equal(record.hit_count, 2);
+    });
+
+    it('should assign extended 30-day TTL for audio tracks and refresh expires_at on hit', () => {
+      const url = 'https://open.spotify.com/track/testAudioTrack123';
+      const beforeSet = Date.now();
+      cache.set(url, {
+        fileId: 'tg_audio_file_id_777',
+        fileType: 'audio',
+        title: 'Song Title',
+        author: 'Artist Name'
+      });
+
+      const entry = cache.get(url);
+      assert.ok(entry);
+      assert.equal(entry.file_type, 'audio');
+      // Verify audio TTL is around 30 days (+- 5000ms)
+      const expected30DaysMs = 30 * 24 * 60 * 60 * 1000;
+      assert.ok(entry.expires_at - beforeSet >= expected30DaysMs - 5000);
+      assert.ok(entry.expires_at - beforeSet <= expected30DaysMs + 5000);
     });
 
     it('should manually delete cache record by URL', () => {

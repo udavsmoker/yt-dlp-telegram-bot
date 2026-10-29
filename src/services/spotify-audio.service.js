@@ -7,9 +7,9 @@ const execFileAsync = util.promisify(execFile);
 const youtubedlExec = require('youtube-dl-exec');
 const config = require('../config');
 const logger = require('../utils/logger');
-const { generateFilename, cleanupFile, prepareThumbnail } = require('../utils/helpers');
+const { generateFilename, cleanupFile, prepareThumbnail, getYtdlpPath } = require('../utils/helpers');
 
-const youtubedl = youtubedlExec.create(process.env.YTDLP_PATH || '/home/udav/.local/bin/yt-dlp');
+const youtubedl = youtubedlExec.create(getYtdlpPath());
 
 class SpotifyAudioService {
   /**

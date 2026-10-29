@@ -2,7 +2,7 @@ const youtubedlExec = require('youtube-dl-exec');
 const path = require('path');
 const fs = require('fs').promises;
 const axios = require('axios');
-const { generateFilename, ensureDir, prepareThumbnail, generateThumbnailFromVideo, formatFileSize, formatDuration } = require('../utils/helpers');
+const { generateFilename, ensureDir, prepareThumbnail, generateThumbnailFromVideo, formatFileSize, formatDuration, getYtdlpPath } = require('../utils/helpers');
 const config = require('../config');
 const logger = require('../utils/logger');
 const tiktokService = require('./tiktok.service');
@@ -19,7 +19,7 @@ try {
 }
 
 // Use system yt-dlp (with PO Token plugin) instead of bundled one
-const youtubedl = youtubedlExec.create(process.env.YTDLP_PATH || '/home/udav/.local/bin/yt-dlp');
+const youtubedl = youtubedlExec.create(getYtdlpPath());
 
 class VideoService {
   constructor() {

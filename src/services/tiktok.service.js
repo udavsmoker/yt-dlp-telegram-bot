@@ -174,10 +174,11 @@ class TikTokService {
             timeout: 15000 // 15 sec to establish connection and get headers
           });
 
+          const maxFileSizeBytes = (config.download?.maxFileSizeMB || 50) * 1024 * 1024;
           const contentLength = parseInt(streamResponse.headers['content-length'] || '0', 10);
-          if (contentLength > 50 * 1024 * 1024) {
+          if (contentLength > maxFileSizeBytes) {
             streamResponse.data.destroy();
-            throw new Error(`File too large (${(contentLength / 1024 / 1024).toFixed(2)} MB), max 50MB allowed`);
+            throw new Error(`File too large (${(contentLength / 1024 / 1024).toFixed(2)} MB), max ${config.download?.maxFileSizeMB || 50}MB allowed`);
           }
 
           const fsSync = require('fs');
@@ -200,10 +201,10 @@ class TikTokService {
                 const eta = `${Math.floor(etaSec / 60)}:${String(etaSec % 60).padStart(2, '0')}`;
                 onProgress({ percent, speed, eta });
               }
-              if (downloadedBytes > 50 * 1024 * 1024) {
+              if (downloadedBytes > maxFileSizeBytes) {
                 streamResponse.data.destroy();
                 writer.destroy();
-                reject(new Error('maxContentLength size of 52428800 exceeded during streaming'));
+                reject(new Error(`maxContentLength size of ${maxFileSizeBytes} exceeded during streaming`));
               }
             });
             streamResponse.data.pipe(writer);

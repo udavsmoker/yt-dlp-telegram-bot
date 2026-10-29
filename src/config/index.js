@@ -18,7 +18,8 @@ module.exports = {
   adminUserId: parseInt(process.env.ADMIN_USER_ID || '0', 10),
   cache: {
     enabled: process.env.ENABLE_VIDEO_CACHE !== 'false',
-    ttlHours: parseInt(process.env.CACHE_TTL_HOURS || '48', 10)
+    ttlHours: parseInt(process.env.CACHE_TTL_HOURS || '48', 10),
+    audioTtlDays: parseInt(process.env.CACHE_AUDIO_TTL_DAYS || '30', 10)
   },
   queue: {
     concurrency: parseInt(process.env.DOWNLOAD_CONCURRENCY || '4', 10)

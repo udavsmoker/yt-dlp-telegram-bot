@@ -3,6 +3,8 @@ const spotifyService = require('../../../services/spotify.service');
 const spotifyAudioService = require('../../../services/spotify-audio.service');
 const queueService = require('../../../services/queue.service');
 const undoService = require('../../../services/undo.service');
+const cacheService = require('../../../services/cache.service');
+const { tryServeFromCache, cacheSentMedia } = require('../common/cache-helper');
 const logger = require('../../../utils/logger');
 const { getFileForTelegram, renderProgressBar, getUserInfo, cleanupFile, escapeHtml } = require('../../../utils/helpers');
 const { getSenderInfo } = require('../common/telegram-sender');
@@ -57,6 +59,12 @@ class SpotifyStrategy extends BaseStrategy {
     const statusMessage = await ctx.reply('⏳ Fetching Spotify track info...');
 
     try {
+      const canonicalUrl = `https://open.spotify.com/track/${trackId}`;
+      if (await tryServeFromCache(ctx, canonicalUrl, statusMessage.message_id, originalMessageId, userInfo, 'audio') ||
+          (url && url !== canonicalUrl && await tryServeFromCache(ctx, url, statusMessage.message_id, originalMessageId, userInfo, 'audio'))) {
+        return;
+      }
+
       const track = await spotifyService.getTrack(trackId);
 
       await queueService.enqueue(async ({ signal } = {}) => {
@@ -107,6 +115,26 @@ class SpotifyStrategy extends BaseStrategy {
 
           if (sentAudio && ctx.chat?.id) {
             undoService.record(ctx.chat.id, [sentAudio.message_id], ctx.from?.id);
+            cacheSentMedia(canonicalUrl, [sentAudio], {
+              platform: 'Spotify',
+              title: result.title,
+              author: result.artist,
+              duration: result.duration
+            }, {
+              duration: result.duration,
+              fileSize: result.fileSize
+            });
+            if (url && url !== canonicalUrl) {
+              cacheSentMedia(url, [sentAudio], {
+                platform: 'Spotify',
+                title: result.title,
+                author: result.artist,
+                duration: result.duration
+              }, {
+                duration: result.duration,
+                fileSize: result.fileSize
+              });
+            }
           }
 
           await result.cleanup();
@@ -347,6 +375,26 @@ class SpotifyStrategy extends BaseStrategy {
     const prepareTrack = async (index) => {
       const track = entity.tracks[index];
 
+      // Check cache first before queuing and downloading
+      if (track.id && !track.id.startsWith('track_')) {
+        const canonicalUrl = `https://open.spotify.com/track/${track.id}`;
+        const cached = cacheService.get(canonicalUrl);
+        if (cached && cached.file_type === 'audio' && cached.file_id) {
+          logger.info(`Playlist track "${track.title}" found in cache (file_id: ${cached.file_id})`);
+          return {
+            success: true,
+            track,
+            cached: true,
+            result: {
+              cachedFileId: cached.file_id,
+              title: cached.title || track.title,
+              artist: cached.author || track.artist,
+              duration: cached.duration ? parseInt(cached.duration, 10) : (track.durationMs ? Math.round(track.durationMs / 1000) : undefined)
+            }
+          };
+        }
+      }
+
       return queueService.enqueue(async ({ signal: queueSignal } = {}) => {
         const combinedAbort = new AbortController();
         const onPlaylistAbort = () => combinedAbort.abort();
@@ -477,19 +525,23 @@ class SpotifyStrategy extends BaseStrategy {
             let retries = 3;
             while (retries > 0 && !sent) {
               if (playlistSignal.aborted) {
-                await result.cleanup();
+                if (typeof result.cleanup === 'function') await result.cleanup().catch(() => {});
                 throw new Error('DOWNLOAD_CANCELLED');
               }
 
               try {
+                const audioPayload = outcome.cached && result.cachedFileId
+                  ? result.cachedFileId
+                  : getFileForTelegram(result.audioPath);
+
                 sent = await ctx.telegram.callApi('sendAudio', {
                   chat_id: ctx.chat.id,
-                  audio: getFileForTelegram(result.audioPath),
+                  audio: audioPayload,
                   ...audioOpts
                 }, playlistSignal ? { signal: playlistSignal } : {});
               } catch (sendErr) {
                 if (playlistSignal.aborted || sendErr.name === 'AbortError' || sendErr.code === 'ERR_ABORTED') {
-                  await result.cleanup();
+                  if (typeof result.cleanup === 'function') await result.cleanup().catch(() => {});
                   throw new Error('DOWNLOAD_CANCELLED');
                 }
                 if (sendErr.parameters?.retry_after) {
@@ -507,18 +559,28 @@ class SpotifyStrategy extends BaseStrategy {
               if (sent?.message_id) {
                 try { await ctx.telegram.deleteMessage(ctx.chat.id, sent.message_id); } catch {}
               }
-              await result.cleanup();
+              if (typeof result.cleanup === 'function') await result.cleanup().catch(() => {});
               throw new Error('DOWNLOAD_CANCELLED');
             }
 
             if (sent && ctx.chat?.id) {
               undoService.record(ctx.chat.id, [sent.message_id], ctx.from?.id);
+              if (!outcome.cached && track.id && !track.id.startsWith('track_')) {
+                cacheService.set(`https://open.spotify.com/track/${track.id}`, {
+                  fileId: sent.audio?.file_id || sent.file_id,
+                  fileType: 'audio',
+                  platform: 'Spotify',
+                  title: result.title,
+                  author: result.artist,
+                  duration: result.duration
+                });
+              }
             }
 
             completedCount++;
           } catch (sendErr) {
             if (playlistSignal.aborted) {
-              await result.cleanup();
+              if (typeof result.cleanup === 'function') await result.cleanup().catch(() => {});
               throw new Error('DOWNLOAD_CANCELLED');
             }
             logger.warn(`Failed to send track "${track.title}" to Telegram: ${sendErr.message}`);
@@ -529,7 +591,7 @@ class SpotifyStrategy extends BaseStrategy {
               error: sendErr.message
             });
           } finally {
-            await result.cleanup();
+            if (typeof result.cleanup === 'function') await result.cleanup().catch(() => {});
           }
         }
 

@@ -484,7 +484,21 @@ function escapeHtml(text) {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * Resolve the path to yt-dlp binary (env var -> ~/.local/bin/yt-dlp -> system PATH).
+ * @returns {string}
+ */
+function getYtdlpPath() {
+  if (process.env.YTDLP_PATH) return process.env.YTDLP_PATH;
+  const userLocal = path.join(process.env.HOME || '', '.local/bin/yt-dlp');
+  try {
+    if (require('fs').existsSync(userLocal)) return userLocal;
+  } catch {}
+  return 'yt-dlp';
+}
+
 module.exports = {
+  getYtdlpPath,
   escapeHtml,
   extractUrl,
   ensureDir,

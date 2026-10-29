@@ -2,6 +2,8 @@ const spotifyService = require('../services/spotify.service');
 const spotifyAudioService = require('../services/spotify-audio.service');
 const queueService = require('../services/queue.service');
 const undoService = require('../services/undo.service');
+const cacheService = require('../services/cache.service');
+const { tryServeFromCache, cacheSentMedia } = require('./download/common/cache-helper');
 const logger = require('../utils/logger');
 const { getFileForTelegram, renderProgressBar, getUserInfo, formatDuration } = require('../utils/helpers');
 const { getSenderInfo } = require('./download/common/telegram-sender');
@@ -250,6 +252,11 @@ async function handleSearchCallback(ctx) {
  * @param {string} userInfo
  */
 async function downloadSelectedTrack(ctx, track, statusMessageId, triggerMessageId, userInfo) {
+  const canonicalUrl = track.id ? `https://open.spotify.com/track/${track.id}` : null;
+  if (canonicalUrl && await tryServeFromCache(ctx, canonicalUrl, statusMessageId, triggerMessageId, userInfo, 'audio')) {
+    return;
+  }
+
   await queueService.enqueue(async ({ signal } = {}) => {
     const progressReporter = queueService.createProgressReporter(ctx, statusMessageId);
     const onProgress = ({ percent, speed, eta }) => {
@@ -299,6 +306,17 @@ async function downloadSelectedTrack(ctx, track, statusMessageId, triggerMessage
 
       if (sentAudio && ctx.chat?.id) {
         undoService.record(ctx.chat.id, [sentAudio.message_id], ctx.from?.id);
+        if (canonicalUrl) {
+          cacheSentMedia(canonicalUrl, [sentAudio], {
+            platform: 'Spotify',
+            title: result.title,
+            author: result.artist,
+            duration: result.duration
+          }, {
+            duration: result.duration,
+            fileSize: result.fileSize
+          });
+        }
       }
 
       await result.cleanup();

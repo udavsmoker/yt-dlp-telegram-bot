@@ -44,6 +44,12 @@ async function handleDownload(ctx, next) {
   if (!message) {
     return next();
   }
+
+  // Ignore messages sent via inline mode (@bot) to prevent duplicate downloads
+  if (message.via_bot) {
+    return next();
+  }
+
   const messageText = message.text || message.caption;
   if (!messageText) {
     return next();

@@ -62,18 +62,26 @@ describe('Inline Mode Service & Handlers', () => {
       assert.equal(results[0].performer, 'Linkin Park');
     });
 
-    it('should provide download article with short deep links for uncached generic URL', async () => {
+    it('should provide download article with short token for uncached generic URL', async () => {
       const genericUrl = 'https://vimeo.com/987654321';
       const results = await inlineService.handleQuery(genericUrl, 'test_bot');
       assert.ok(results.length >= 1);
       assert.equal(results[0].type, 'article');
       assert.ok(results[0].title.includes('Download Media'));
-      const buttons = results[0].reply_markup.inline_keyboard[0];
-      assert.ok(buttons[0].url.includes('start=s_'));
-      // Verify token length is well within Telegram 64-char limit
-      const token = buttons[0].url.split('start=')[1];
-      assert.ok(token.length <= 64);
+      const token = results[0].id.replace('gen_', '');
+      assert.ok(token.length <= 15);
       assert.equal(inlineService.getShortLink(token), genericUrl);
+    });
+
+    it('should resolve Instagram URL with auto-download article card', async () => {
+      const instaUrl = 'https://www.instagram.com/reel/C8qV7X8I4Jz/';
+      const results = await inlineService.handleQuery(instaUrl, 'test_bot');
+      assert.ok(results.length >= 1);
+      assert.equal(results[0].type, 'article');
+      assert.ok(results[0].id.startsWith('ig_'));
+      assert.ok(results[0].title.includes('Instagram'));
+      const token = results[0].id.replace('ig_', '');
+      assert.equal(inlineService.getShortLink(token), instaUrl);
     });
 
     it('should resolve Spotify track URL with 320 kbps MP3 article card', async () => {

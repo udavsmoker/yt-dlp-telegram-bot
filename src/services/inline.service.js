@@ -3,7 +3,7 @@ const cacheService = require('./cache.service');
 const spotifyAudioService = require('./spotify-audio.service');
 const spotifyService = require('./spotify.service');
 const logger = require('../utils/logger');
-const { escapeHtml, formatDuration, isTikTokUrl, isYouTubeUrl } = require('../utils/helpers');
+const { escapeHtml, formatDuration, isTikTokUrl, isYouTubeUrl, isInstagramUrl } = require('../utils/helpers');
 
 class InlineService {
   constructor() {
@@ -15,12 +15,12 @@ class InlineService {
     // Track metadata store for chosen inline results (TTL: 10 minutes)
     this.pendingTracks = new Map();
 
-    // Shortlink store for deep-links to prevent exceeding Telegram's 64-char start parameter limit
+    // Shortlink store for deep-links and inline media resolution (TTL: 24h)
     this.shortLinks = new Map();
   }
 
   /**
-   * Create a short identifier (<= 12 chars) for deep-linking in /start.
+   * Create a short identifier (<= 12 chars) for inline callbacks and deep-links.
    * @param {string} url
    * @returns {string}
    */
@@ -172,8 +172,8 @@ class InlineService {
           id: `cache_vid_${cached.id}`,
           video_file_id: cached.file_id,
           title: cached.title || 'Cached Video',
-          description: `⚡ Cached Video • ${cached.author || 'Ready'}`,
-          caption: cached.caption_info || `📹 <b>${escapeHtml(cached.title || 'Video')}</b>\nvia @${botUsername}`,
+          description: `⚡ Instant Video • ${cached.author || 'Ready'}`,
+          caption: `📹 <b>${escapeHtml(cached.title || 'Video')}</b>\nvia @${botUsername}`,
           parse_mode: 'HTML'
         });
         return results;
@@ -185,7 +185,7 @@ class InlineService {
           audio_file_id: cached.file_id,
           title: cached.title || 'Cached Audio',
           performer: cached.author || 'Music',
-          caption: cached.caption_info || `🎵 <b>${escapeHtml(cached.title || 'Audio')}</b>\nvia @${botUsername}`,
+          caption: `🎵 <b>${escapeHtml(cached.title || 'Audio')}</b> — <i>${escapeHtml(cached.author || 'Music')}</i>\nvia @${botUsername}`,
           parse_mode: 'HTML'
         });
         return results;
@@ -289,17 +289,13 @@ class InlineService {
               description: `${track.artist} • 320 kbps MP3`,
               thumb_url: track.coverUrl || 'https://cdn-icons-png.flaticon.com/128/2111/2111624.png',
               input_message_content: {
-                message_text: (
-                  `⏳ <b>Downloading:</b> 🎵 <b>${escapeHtml(track.title)}</b> — <i>${escapeHtml(track.artist)}</i>\n` +
-                  `💿 Album: <i>${escapeHtml(track.album || 'Single')}</i>\n` +
-                  `<i>Converting to 320 kbps MP3 with album art...</i>`
-                ),
+                message_text: `⏳ <b>Downloading:</b> ${escapeHtml(track.artist)} — ${escapeHtml(track.title)}...`,
                 parse_mode: 'HTML'
               },
               reply_markup: {
                 inline_keyboard: [
                   [
-                    { text: '⏳ Downloading 320 kbps MP3...', callback_data: `inline_wait:spot_${parsed.id}` }
+                    { text: '⏳ Downloading...', callback_data: `inline_wait:spot_${parsed.id}` }
                   ]
                 ]
               }
@@ -312,46 +308,67 @@ class InlineService {
       }
     }
 
-    // 4. YouTube resolution (fetch metadata via oEmbed)
+    // 4. Instagram resolution (download directly into chat)
+    if (isInstagramUrl(url)) {
+      const shortToken = this.createShortLink(url);
+      results.push({
+        type: 'article',
+        id: `ig_${shortToken}`,
+        title: '📹 Instagram Media',
+        description: 'Tap to download directly into this chat',
+        thumb_url: 'https://cdn-icons-png.flaticon.com/128/2111/2111463.png',
+        input_message_content: {
+          message_text: '⏳ <b>Downloading Instagram media...</b>',
+          parse_mode: 'HTML'
+        },
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '⏳ Downloading...', callback_data: `inline_wait:ig` }
+            ]
+          ]
+        }
+      });
+      return results;
+    }
+
+    // 5. YouTube resolution (download directly into chat)
     if (isYouTubeUrl(url)) {
+      const shortToken = this.createShortLink(url);
+      let title = 'YouTube Video';
+      let author = 'YouTube';
+      let thumb = 'https://cdn-icons-png.flaticon.com/128/1384/1384060.png';
+
       try {
         const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
         const res = await axios.get(oembedUrl, { timeout: 2500 });
-        const title = res.data?.title || 'YouTube Video';
-        const author = res.data?.author_name || 'YouTube';
-        const thumb = res.data?.thumbnail_url || 'https://cdn-icons-png.flaticon.com/128/1384/1384060.png';
-        const shortToken = this.createShortLink(url);
+        if (res.data?.title) title = res.data.title;
+        if (res.data?.author_name) author = res.data.author_name;
+        if (res.data?.thumbnail_url) thumb = res.data.thumbnail_url;
+      } catch {}
 
-        results.push({
-          type: 'article',
-          id: `yt_${shortToken}`,
-          title: title,
-          description: `${author} • Tap to download`,
-          thumb_url: thumb,
-          input_message_content: {
-            message_text: (
-              `🎬 <b><a href="${url}">${escapeHtml(title)}</a></b>\n` +
-              `👤 <i>${escapeHtml(author)}</i>\n\n` +
-              `<i>Choose download format below:</i>`
-            ),
-            parse_mode: 'HTML'
-          },
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '📹 Download Video', url: `https://t.me/${botUsername}?start=${shortToken}` },
-                { text: '🎵 Download MP3', url: `https://t.me/${botUsername}?start=${shortToken}` }
-              ]
+      results.push({
+        type: 'article',
+        id: `yt_${shortToken}`,
+        title: title,
+        description: `${author} • Tap to download into this chat`,
+        thumb_url: thumb,
+        input_message_content: {
+          message_text: `⏳ <b>Downloading:</b> ${escapeHtml(title)}...`,
+          parse_mode: 'HTML'
+        },
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '⏳ Downloading...', callback_data: `inline_wait:yt` }
             ]
-          }
-        });
-        return results;
-      } catch (err) {
-        logger.warn(`Inline YouTube oEmbed failed: ${err.message}`);
-      }
+          ]
+        }
+      });
+      return results;
     }
 
-    // 5. Generic fallback article for other platforms
+    // 6. Generic fallback article for other platforms
     const shortToken = this.createShortLink(url);
     results.push({
       type: 'article',
@@ -360,17 +377,13 @@ class InlineService {
       description: url,
       thumb_url: 'https://cdn-icons-png.flaticon.com/128/1179/1179069.png',
       input_message_content: {
-        message_text: (
-          `📥 <b>Media Downloader</b>\n\n` +
-          `<b>Link:</b> <code>${escapeHtml(url)}</code>\n\n` +
-          `<i>Click below to start download:</i>`
-        ),
+        message_text: '⏳ <b>Downloading media...</b>',
         parse_mode: 'HTML'
       },
       reply_markup: {
         inline_keyboard: [
           [
-            { text: '🚀 Download Media', url: `https://t.me/${botUsername}?start=${shortToken}` }
+            { text: '⏳ Downloading...', callback_data: `inline_wait:gen` }
           ]
         ]
       }
@@ -408,6 +421,7 @@ class InlineService {
       } else {
         // Candidate article that triggers automatic download on tap via chosen_inline_result
         const durationSec = Math.round(track.durationMs / 1000);
+        track.coverUrl = `https://i.ytimg.com/vi/${track.youtubeId}/hqdefault.jpg`;
         this.setPendingTrack(`song_${track.youtubeId}`, track);
 
         results.push({
@@ -417,17 +431,13 @@ class InlineService {
           description: `${track.artist} • ${formatDuration(durationSec)} • 320 kbps MP3`,
           thumb_url: `https://i.ytimg.com/vi/${track.youtubeId}/hqdefault.jpg`,
           input_message_content: {
-            message_text: (
-              `⏳ <b>Downloading:</b> 🎵 <b>${escapeHtml(track.title)}</b> — <i>${escapeHtml(track.artist)}</i>\n` +
-              `⏱ Duration: <code>${formatDuration(durationSec)}</code>\n` +
-              `<i>Converting to 320 kbps MP3 with album art...</i>`
-            ),
+            message_text: `⏳ <b>Downloading:</b> ${escapeHtml(track.artist)} — ${escapeHtml(track.title)}...`,
             parse_mode: 'HTML'
           },
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '⏳ Downloading 320 kbps MP3...', callback_data: `inline_wait:${track.youtubeId}` }
+                { text: '⏳ Downloading...', callback_data: `inline_wait:${track.youtubeId}` }
               ]
             ]
           }

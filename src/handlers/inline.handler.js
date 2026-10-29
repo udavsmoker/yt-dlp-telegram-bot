@@ -1,6 +1,8 @@
+const axios = require('axios');
 const inlineService = require('../services/inline.service');
 const spotifyAudioService = require('../services/spotify-audio.service');
 const spotifyService = require('../services/spotify.service');
+const videoService = require('../services/video.service');
 const cacheService = require('../services/cache.service');
 const config = require('../config');
 const logger = require('../utils/logger');
@@ -30,7 +32,7 @@ async function handleInlineQuery(ctx) {
 }
 
 /**
- * Background worker to download, tag, and deliver an inline music track to chat.
+ * Background worker to download, tag, and deliver an inline music track directly to chat.
  * Replaces the temporary "Downloading..." article message with full audio player.
  * @param {object} ctx
  * @param {string} resultId
@@ -62,12 +64,33 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
       }
     } else if (resultId.startsWith('song_')) {
       const youtubeId = resultId.replace('song_', '');
+      let title = 'Track';
+      let artist = 'Music';
+      let coverUrl = `https://i.ytimg.com/vi/${youtubeId}/hqdefault.jpg`;
+      try {
+        const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${youtubeId}&format=json`;
+        const res = await axios.get(oembedUrl, { timeout: 2500 });
+        if (res.data?.title) {
+          title = res.data.title;
+          artist = res.data.author_name || 'Music';
+          if (title.includes(' - ')) {
+            const parts = title.split(' - ');
+            artist = parts[0].trim();
+            title = parts.slice(1).join(' - ').replace(/\s*\(Official.*?\)/i, '').replace(/\s*\[Official.*?\]/i, '').trim();
+          }
+        }
+        if (res.data?.thumbnail_url) coverUrl = res.data.thumbnail_url;
+      } catch (err) {
+        logger.warn(`Could not resolve YouTube oEmbed fallback track: ${err.message}`);
+      }
+
       track = {
         id: `yt_${youtubeId}`,
         youtubeId,
-        title: 'Track',
-        artist: 'Music',
-        album: 'Single',
+        title,
+        artist,
+        album: title,
+        coverUrl,
         durationMs: 0
       };
     }
@@ -78,7 +101,7 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
     return;
   }
 
-  logger.info(`Starting automatic inline download for "${track.title}" by "${track.artist}" (resultId: ${resultId})`);
+  logger.info(`Starting automatic inline music download for "${track.title}" by "${track.artist}"`);
   let result = null;
 
   try {
@@ -103,7 +126,7 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
           fileId = sent.audio.file_id;
         }
       } catch (dmErr) {
-        // If DM to user failed (e.g. 403 Forbidden), fallback to admin user
+        // Fallback to admin user if sending to recipient DM is blocked
         if (config.adminUserId && recipientId !== config.adminUserId) {
           try {
             const adminSent = await ctx.telegram.sendAudio(config.adminUserId, getFileForTelegram(result.audioPath), {
@@ -131,7 +154,7 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
         {
           type: 'audio',
           media: fileId,
-          caption: `🎵 <b>${escapeHtml(result.title)}</b> — <i>${escapeHtml(result.artist)}</i>\nvia @${botUsername}`,
+          caption: `🎵 <b>${escapeHtml(result.title)}</b> — <i>${escapeHtml(result.artist)}</i>`,
           parse_mode: 'HTML'
         }
       );
@@ -170,8 +193,101 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
 }
 
 /**
+ * Background worker to download and deliver an inline video (Instagram, YouTube, generic) to chat.
+ * Replaces the temporary "Downloading..." article message with native video player.
+ * @param {object} ctx
+ * @param {string} resultId
+ * @param {string} inlineMessageId
+ * @param {string} botUsername
+ */
+async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUsername) {
+  const shortToken = resultId.replace(/^(?:ig|yt|gen)_/, '');
+  const url = inlineService.getShortLink(shortToken);
+
+  if (!url) {
+    logger.warn(`No URL found for inline video token: ${shortToken}`);
+    return;
+  }
+
+  logger.info(`Starting automatic inline video download for ${url} (resultId: ${resultId})`);
+  let result = null;
+
+  try {
+    result = await videoService.download(url);
+
+    let fileId = null;
+    const recipientId = ctx.from?.id || config.adminUserId;
+
+    if (recipientId && result.filePath) {
+      const videoCaption = `📹 <b>${escapeHtml(result.info?.title || 'Video')}</b>\nvia @${botUsername}`;
+      const videoOpts = {
+        caption: videoCaption,
+        parse_mode: 'HTML',
+        ...(result.thumbnailPath ? { thumbnail: getFileForTelegram(result.thumbnailPath) } : {}),
+        ...(result.info?.width ? { width: result.info.width } : {}),
+        ...(result.info?.height ? { height: result.info.height } : {}),
+        ...(result.info?.duration ? { duration: result.info.duration } : {})
+      };
+
+      try {
+        const sent = await ctx.telegram.sendVideo(recipientId, getFileForTelegram(result.filePath), videoOpts);
+        if (sent?.video?.file_id) {
+          fileId = sent.video.file_id;
+        }
+      } catch (dmErr) {
+        if (config.adminUserId && recipientId !== config.adminUserId) {
+          try {
+            const adminSent = await ctx.telegram.sendVideo(config.adminUserId, getFileForTelegram(result.filePath), videoOpts);
+            if (adminSent?.video?.file_id) {
+              fileId = adminSent.video.file_id;
+            }
+          } catch (adminErr) {
+            logger.warn(`Fallback video upload to admin failed: ${adminErr.message}`);
+          }
+        }
+      }
+    }
+
+    if (fileId && inlineMessageId) {
+      await ctx.telegram.editMessageMedia(
+        undefined, undefined, inlineMessageId,
+        {
+          type: 'video',
+          media: fileId,
+          caption: `📹 <b>${escapeHtml(result.info?.title || 'Video')}</b>`,
+          parse_mode: 'HTML'
+        }
+      );
+
+      cacheService.set(url, {
+        fileId: fileId,
+        fileType: 'video',
+        title: result.info?.title,
+        author: result.info?.uploader,
+        duration: String(result.info?.duration || 0),
+        fileSize: result.fileSize
+      });
+
+      logger.info(`Successfully delivered inline video to message ${inlineMessageId}`);
+    }
+  } catch (err) {
+    logger.error(`Failed to process inline video download for ${url}: ${err.message}`);
+    if (inlineMessageId) {
+      await ctx.telegram.editMessageText(
+        undefined, undefined, inlineMessageId,
+        `❌ <b>Download Failed:</b> ${escapeHtml(err.message)}`,
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+    }
+  } finally {
+    if (result?.filePath) await cleanupFile(result.filePath);
+    if (result?.thumbnailPath) await cleanupFile(result.thumbnailPath);
+  }
+}
+
+/**
  * Handle chosen inline result event.
- * Automatically initiates track synthesis and delivers audio to the chat.
+ * Automatically initiates media synthesis and delivers media directly to the chat.
  * @param {object} ctx
  */
 async function handleChosenInlineResult(ctx) {
@@ -192,6 +308,14 @@ async function handleChosenInlineResult(ctx) {
     processInlineMusicDownload(ctx, resultId, inlineMessageId, botUsername).catch(err => {
       logger.error(`Unhandled error in inline music processing: ${err.message}`);
     });
+    return;
+  }
+
+  // Videos (Instagram, YouTube, generic): automatically download and replace placeholder with video
+  if (resultId.startsWith('ig_') || resultId.startsWith('yt_') || resultId.startsWith('gen_')) {
+    processInlineVideoDownload(ctx, resultId, inlineMessageId, botUsername).catch(err => {
+      logger.error(`Unhandled error in inline video processing: ${err.message}`);
+    });
   }
 }
 
@@ -201,7 +325,7 @@ async function handleChosenInlineResult(ctx) {
  * @param {object} ctx
  */
 async function handleInlineDownloadCallback(ctx) {
-  await ctx.answerCbQuery('⏳ Track is being downloaded and converted to 320 kbps MP3...\nPlease wait a few seconds!', {
+  await ctx.answerCbQuery('⏳ Downloading and preparing media... Please wait a few seconds!', {
     show_alert: false
   });
 }

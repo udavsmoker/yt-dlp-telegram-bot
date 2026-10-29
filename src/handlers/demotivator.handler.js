@@ -14,8 +14,15 @@ async function handleDemotivate(ctx) {
       return ctx.reply('❌ Demotivators are disabled. Ask an admin to enable it in /settings.');
     }
 
+    const rawText = ctx.message?.text || ctx.message?.caption || '';
+    let customText = rawText.replace(/^\/demotivate(?:@\w+)?\s*/i, '').trim() || null;
+
     let fileId = null;
-    if (ctx.message.reply_to_message && ctx.message.reply_to_message.photo) {
+    if (ctx.message?.photo) {
+      const photoArr = ctx.message.photo;
+      fileId = photoArr[photoArr.length - 1].file_id;
+      logger.info(`Demotivate request from ${userInfo} (photo with caption)`);
+    } else if (ctx.message?.reply_to_message?.photo) {
       const replyPhoto = ctx.message.reply_to_message.photo;
       fileId = replyPhoto[replyPhoto.length - 1].file_id;
       logger.info(`Demotivate request from ${userInfo} (reply to photo)`);
@@ -32,7 +39,8 @@ async function handleDemotivate(ctx) {
     const result = await demotivatorService.generateDemotivator(
       ctx.chat.id,
       fileId,
-      ctx.telegram
+      ctx.telegram,
+      customText
     );
 
     resultPath = result.filePath;

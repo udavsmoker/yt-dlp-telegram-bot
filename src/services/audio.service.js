@@ -126,6 +126,93 @@ class AudioService {
       throw new Error(`Audio conversion failed: ${error.message}`);
     }
   }
+
+  /**
+   * Probe audio metadata using ffprobe.
+   * @param {string} filePath
+   * @param {AbortSignal|null} [signal=null]
+   * @returns {Promise<{duration: number, title: string, artist: string}>}
+   */
+  async probeAudio(filePath, signal = null) {
+    let duration = 0;
+    let title = 'Audio';
+    let artist = 'Unknown';
+    try {
+      const { stdout: metadata } = await execFile('ffprobe', [
+        '-v', 'error',
+        '-show_entries', 'format=duration:format_tags=title,artist,author,album',
+        '-of', 'json',
+        filePath
+      ], { encoding: 'utf8', timeout: 10000, signal });
+      const parsed = JSON.parse(metadata);
+      if (parsed.format) {
+        duration = parseFloat(parsed.format.duration) || 0;
+        if (parsed.format.tags) {
+          title = parsed.format.tags.title || 'Audio';
+          artist = parsed.format.tags.artist || parsed.format.tags.author || 'Unknown';
+        }
+      }
+    } catch {}
+    return { duration, title, artist };
+  }
+
+  /**
+   * Edit ID3 tags and cover art of an audio file without re-encoding audio frames.
+   * @param {string} inputAudioPath
+   * @param {object} tags - { title, artist, album, coverPath }
+   * @param {object} [options={}] - { signal }
+   * @returns {Promise<{audioPath: string, duration: number, title: string, artist: string, fileSize: number}>}
+   */
+  async editAudioTags(inputAudioPath, tags = {}, options = {}) {
+    await ensureDir(config.download.tempDir);
+    const signal = options.signal;
+    const outputFilename = generateFilename('tagged_audio', 'mp3');
+    const outputAudioPath = path.join(config.download.tempDir, outputFilename);
+
+    try {
+      const existing = await this.probeAudio(inputAudioPath, signal);
+      const newTitle = tags.title?.trim() || existing.title;
+      const newArtist = tags.artist?.trim() || existing.artist;
+      const newAlbum = tags.album?.trim() || newTitle;
+
+      const ffmpegArgs = ['-y', '-i', inputAudioPath];
+
+      if (tags.coverPath) {
+        ffmpegArgs.push(
+          '-i', tags.coverPath,
+          '-map', '0:a',
+          '-map', '1:v',
+          '-c:a', 'copy',
+          '-c:v', 'mjpeg',
+          '-disposition:v:0', 'attached_pic'
+        );
+      } else {
+        ffmpegArgs.push('-map', '0', '-c', 'copy');
+      }
+
+      ffmpegArgs.push(
+        '-id3v2_version', '3',
+        '-metadata', `title=${newTitle}`,
+        '-metadata', `artist=${newArtist}`,
+        '-metadata', `album=${newAlbum}`,
+        outputAudioPath
+      );
+
+      await execFile('ffmpeg', ffmpegArgs, { timeout: 60000, signal });
+
+      const stats = await fs.stat(outputAudioPath);
+      return {
+        audioPath: outputAudioPath,
+        duration: Math.floor(existing.duration),
+        title: newTitle,
+        artist: newArtist,
+        fileSize: stats.size
+      };
+    } catch (err) {
+      try { await fs.unlink(outputAudioPath); } catch {}
+      throw err;
+    }
+  }
 }
 
 module.exports = new AudioService();

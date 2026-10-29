@@ -14,37 +14,51 @@ function isLocalBotApi() {
 }
 
 /**
- * Resolve local disk path for a Telegram file_id.
+ * Resolve local disk path for any Telegram file_id (audio, video, photo, voice).
  * For local Bot API servers, returns the direct filesystem path without downloading.
  * For public Bot API servers, downloads the file to the temp directory.
+ * @param {object} ctx - Telegraf context
+ * @param {string} fileId - Telegram file_id
+ * @param {string} [defaultExt='bin']
+ * @returns {Promise<{ localPath: string, needsCleanup: boolean }>}
+ */
+async function getTelegramFileLocalPath(ctx, fileId, defaultExt = 'bin') {
+  if (isLocalBotApi()) {
+    const file = await ctx.telegram.getFile(fileId);
+    if (file.file_path && file.file_path.startsWith('/')) {
+      logger.info(`Local Bot API file path: ${file.file_path}`);
+      return { localPath: file.file_path, needsCleanup: false };
+    }
+  }
+
+  const fileLink = await ctx.telegram.getFileLink(fileId);
+  await ensureDir(config.download.tempDir);
+  const tempPath = path.join(config.download.tempDir, generateFilename('tg_file', defaultExt));
+
+  const response = await axios({
+    method: 'GET',
+    url: fileLink.toString(),
+    responseType: 'arraybuffer',
+    timeout: 120000
+  });
+  await fs.writeFile(tempPath, response.data);
+
+  return { localPath: tempPath, needsCleanup: true };
+}
+
+/**
+ * Resolve local disk path for a Telegram file_id.
+ * Backwards compatible alias for getVideoLocalPath.
  * @param {object} ctx - Telegraf context
  * @param {string} fileId - Telegram file_id
  * @returns {Promise<{ localPath: string, needsCleanup: boolean }>}
  */
 async function getVideoLocalPath(ctx, fileId) {
-  if (isLocalBotApi()) {
-    const file = await ctx.telegram.getFile(fileId);
-    const localPath = file.file_path;
-    logger.info(`Local Bot API file path: ${localPath}`);
-    return { localPath, needsCleanup: false };
-  } else {
-    const fileLink = await ctx.telegram.getFileLink(fileId);
-    await ensureDir(config.download.tempDir);
-    const videoPath = path.join(config.download.tempDir, generateFilename('audio_source', 'mp4'));
-
-    const response = await axios({
-      method: 'GET',
-      url: fileLink.toString(),
-      responseType: 'arraybuffer',
-      timeout: 120000
-    });
-    await fs.writeFile(videoPath, response.data);
-
-    return { localPath: videoPath, needsCleanup: true };
-  }
+  return getTelegramFileLocalPath(ctx, fileId, 'mp4');
 }
 
 module.exports = {
   isLocalBotApi,
-  getVideoLocalPath
+  getVideoLocalPath,
+  getTelegramFileLocalPath
 };

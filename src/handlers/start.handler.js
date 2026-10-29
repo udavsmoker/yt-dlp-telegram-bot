@@ -16,7 +16,8 @@ Send me any supported link, and I will deliver the highest quality media directl
 • <b>Videos:</b> YouTube, TikTok, Instagram (Reels, Posts, Carousels), X/Twitter, Bluesky, Reddit, and more (up to ${maxSize})
 • <b>Spotify Music:</b> Tracks, Albums, and Playlists in 320 kbps MP3 with embedded album art and ID3 metadata
 • <b>Song Search:</b> Type any song title in private chat or use <code>/song &lt;title&gt;</code>
-• <b>Audio Extraction:</b> Reply to any video with <code>/mp3</code> to convert it to audio
+• <b>Audio Extraction & Tagging:</b> <code>/mp3</code>, <code>/tag Title - Artist</code>, <code>/cover</code>
+• <b>Media Tools:</b> <code>/cut</code> (trim media), <code>/tts</code> (text to speech), <code>/demotivate</code>
 
 ⚡ <b>Quick Controls:</b>
 • <code>/cancel</code> — Stop active or queued downloads

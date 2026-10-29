@@ -15,6 +15,10 @@ async function handleHelp(ctx) {
 • <code>/song &lt;title&gt;</code> — Search and download music directly <i>(aliases: /music, /track, /search)</i>
 • <i>In private chat:</i> send any song name without commands to search
 • <code>/mp3</code> — Extract audio from a video (reply to any video message)
+• <code>/tag &lt;title&gt; - &lt;artist&gt;</code> — Change title, artist, and cover art (reply to audio)
+• <code>/cover</code> — Update cover art (reply with photo to audio)
+• <code>/cut &lt;start&gt; &lt;end&gt;</code> — Trim video or audio (e.g. <code>/cut 0:15 1:30</code>)
+• <code>/tts &lt;text&gt;</code> — Voice text or replied message into a voice note
 
 <b>⚡ Queue & Process Control:</b>
 • <code>/cancel</code> — Stop active/queued download or cancel selection menu
@@ -26,7 +30,7 @@ async function handleHelp(ctx) {
 • <code>/about</code> — View bot engine and technical specs
 
 <b>🎉 Entertainment (if enabled in /settings):</b>
-• <code>/demotivate</code> — Create a Russian-style demotivator (or reply to a photo)
+• <code>/demotivate [title | subtitle]</code> — Create demotivator with custom or random text
 • <code>/meme [template]</code> — Generate a meme from chat messages
 • <code>/meme list</code> — List available meme templates
 • <code>/photostats</code> — View chat photo storage statistics

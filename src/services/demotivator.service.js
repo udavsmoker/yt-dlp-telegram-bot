@@ -26,9 +26,10 @@ class DemotivatorService {
    * @param {string} chatId - Chat ID for message/photo selection
    * @param {string} fileId - Optional file_id for specific photo (from reply)
    * @param {object} telegram - Telegraf Telegram API instance (ctx.telegram)
+   * @param {string|object|null} [customText=null] - Optional custom title and subtitle
    * @returns {Promise<{filePath: string, photoInfo: object, text: string}>}
    */
-  async generateDemotivator(chatId, fileId = null, telegram = null) {
+  async generateDemotivator(chatId, fileId = null, telegram = null, customText = null) {
     let tempImagePath = null;
 
     try {
@@ -81,16 +82,31 @@ class DemotivatorService {
       // Load the image
       const sourceImage = await loadImage(tempImagePath);
 
-      // Get random message(s) for text - randomly 1 or 2 texts
-      const useDoubleText = Math.random() < 0.5; // 50% chance for 2 texts
-      const messageText1 = markovDb.getRandomMessage(chatId);
-      if (!messageText1) {
-        throw new Error('No messages available for demotivator text');
+      // Determine text for demotivator: custom or random from Markov DB
+      let messageText1 = null;
+      let messageText2 = null;
+
+      if (customText) {
+        if (typeof customText === 'string') {
+          const parts = customText.split(/\s*\|\s*|\n+/);
+          messageText1 = parts[0]?.trim();
+          messageText2 = parts[1]?.trim() || null;
+        } else if (typeof customText === 'object') {
+          messageText1 = customText.title?.trim() || customText.text1?.trim();
+          messageText2 = customText.subtitle?.trim() || customText.text2?.trim() || null;
+        }
       }
 
-      let messageText2 = null;
-      if (useDoubleText) {
-        messageText2 = markovDb.getRandomMessage(chatId);
+      if (!messageText1) {
+        const useDoubleText = Math.random() < 0.5; // 50% chance for 2 texts
+        messageText1 = markovDb.getRandomMessage(chatId);
+        if (!messageText1) {
+          throw new Error('No messages available for demotivator text. Send some messages to the chat first!');
+        }
+
+        if (useDoubleText) {
+          messageText2 = markovDb.getRandomMessage(chatId);
+        }
       }
 
       // Generate demotivator

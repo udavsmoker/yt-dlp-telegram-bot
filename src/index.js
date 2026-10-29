@@ -173,18 +173,32 @@ async function startBot() {
       logger.info(`Max file size: ${config.download.maxFileSizeMB}MB`);
     }
     
+    const allowedUpdates = [
+      'message',
+      'edited_message',
+      'channel_post',
+      'edited_channel_post',
+      'inline_query',
+      'chosen_inline_result',
+      'callback_query',
+      'my_chat_member',
+      'chat_member'
+    ];
+
     if (config.webhook.domain) {
       await bot.launch({
         webhook: {
           domain: config.webhook.domain,
           port: config.webhook.port,
           path: config.webhook.path
-        }
+        },
+        allowedUpdates
       });
       logger.info(`Bot started in webhook mode on ${config.webhook.domain}${config.webhook.path}`);
     } else {
       await bot.launch({
-        dropPendingUpdates: true
+        dropPendingUpdates: true,
+        allowedUpdates
       });
       logger.info('Bot started in polling mode (pending updates dropped)');
     }

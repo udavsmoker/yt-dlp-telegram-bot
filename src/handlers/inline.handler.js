@@ -31,6 +31,9 @@ async function handleInlineQuery(ctx) {
   }
 }
 
+// Concurrency tracking to prevent overlapping downloads for the same inline message
+const activeInlineDownloads = new Set();
+
 /**
  * Background worker to download, tag, and deliver an inline music track directly to chat.
  * Replaces the temporary "Downloading..." article message with full audio player.
@@ -40,6 +43,14 @@ async function handleInlineQuery(ctx) {
  * @param {string} botUsername
  */
 async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUsername) {
+  if (inlineMessageId) {
+    if (activeInlineDownloads.has(inlineMessageId)) {
+      logger.info(`Inline music download already in progress for message: ${inlineMessageId}`);
+      return;
+    }
+    activeInlineDownloads.add(inlineMessageId);
+  }
+
   let track = inlineService.getPendingTrack(resultId);
 
   // If track not found in memory (e.g. server restart), resolve metadata on-demand
@@ -105,6 +116,16 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
   let result = null;
 
   try {
+    if (inlineMessageId) {
+      await ctx.telegram.editMessageReplyMarkup(undefined, undefined, inlineMessageId, {
+        inline_keyboard: [
+          [
+            { text: '⏳ Скачивание 320k MP3...', callback_data: 'inline_wait:busy' }
+          ]
+        ]
+      }).catch(() => {});
+    }
+
     result = await spotifyAudioService.downloadAndTagTrack(track);
 
     // Obtain Telegram file_id to edit the inline message
@@ -187,6 +208,7 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
       );
     } catch {}
   } finally {
+    if (inlineMessageId) activeInlineDownloads.delete(inlineMessageId);
     if (result?.audioPath) await cleanupFile(result.audioPath);
     if (result?.thumbnailPath) await cleanupFile(result.thumbnailPath);
   }
@@ -201,11 +223,20 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
  * @param {string} botUsername
  */
 async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUsername) {
+  if (inlineMessageId) {
+    if (activeInlineDownloads.has(inlineMessageId)) {
+      logger.info(`Inline video download already in progress for message: ${inlineMessageId}`);
+      return;
+    }
+    activeInlineDownloads.add(inlineMessageId);
+  }
+
   const shortToken = resultId.replace(/^(?:ig|yt|gen)_/, '');
   const url = inlineService.getShortLink(shortToken);
 
   if (!url) {
     logger.warn(`No URL found for inline video token: ${shortToken}`);
+    if (inlineMessageId) activeInlineDownloads.delete(inlineMessageId);
     return;
   }
 
@@ -213,6 +244,16 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
   let result = null;
 
   try {
+    if (inlineMessageId) {
+      await ctx.telegram.editMessageReplyMarkup(undefined, undefined, inlineMessageId, {
+        inline_keyboard: [
+          [
+            { text: '⏳ Скачивание видео...', callback_data: 'inline_wait:busy' }
+          ]
+        ]
+      }).catch(() => {});
+    }
+
     result = await videoService.download(url);
 
     let fileId = null;
@@ -280,6 +321,7 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
       ).catch(() => {});
     }
   } finally {
+    if (inlineMessageId) activeInlineDownloads.delete(inlineMessageId);
     if (result?.filePath) await cleanupFile(result.filePath);
     if (result?.thumbnailPath) await cleanupFile(result.thumbnailPath);
   }
@@ -320,14 +362,46 @@ async function handleChosenInlineResult(ctx) {
 }
 
 /**
- * Handle inline button click (inline_wait:*).
- * Shows a toast alert confirming that download is actively in progress.
+ * Handle inline button click (inline_wait:* or inline_dl:*).
+ * Initiates download if not yet started or shows status alert.
  * @param {object} ctx
  */
 async function handleInlineDownloadCallback(ctx) {
-  await ctx.answerCbQuery('⏳ Downloading and preparing media... Please wait a few seconds!', {
+  const data = ctx.callbackQuery?.data || '';
+  const inlineMessageId = ctx.callbackQuery?.inline_message_id;
+  const botUsername = ctx.botInfo?.username || 'bot';
+
+  // Format: inline_dl:<resultId> or inline_wait:<resultId>
+  const targetId = data.replace(/^inline_(?:dl|wait):/, '');
+
+  if (targetId === 'busy' || (inlineMessageId && activeInlineDownloads.has(inlineMessageId))) {
+    await ctx.answerCbQuery('⏳ Скачивание уже идет, подождите пару секунд...', {
+      show_alert: false
+    }).catch(() => {});
+    return;
+  }
+
+  await ctx.answerCbQuery('🚀 Начинаем скачивание медиа...', {
     show_alert: false
-  });
+  }).catch(() => {});
+
+  if (!inlineMessageId) return;
+
+  // Music tracks: automatically download and replace placeholder with audio
+  if (targetId.startsWith('song_') || targetId.startsWith('spot_') || (!targetId.includes('_') && targetId.length > 5)) {
+    const fullId = targetId.startsWith('song_') || targetId.startsWith('spot_') ? targetId : `song_${targetId}`;
+    processInlineMusicDownload(ctx, fullId, inlineMessageId, botUsername).catch(err => {
+      logger.error(`Unhandled error in inline music processing via callback: ${err.message}`);
+    });
+    return;
+  }
+
+  // Videos (Instagram, YouTube, generic)
+  if (targetId.startsWith('ig_') || targetId.startsWith('yt_') || targetId.startsWith('gen_')) {
+    processInlineVideoDownload(ctx, targetId, inlineMessageId, botUsername).catch(err => {
+      logger.error(`Unhandled error in inline video processing via callback: ${err.message}`);
+    });
+  }
 }
 
 module.exports = {

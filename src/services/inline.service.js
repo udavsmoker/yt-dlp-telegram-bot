@@ -295,7 +295,7 @@ class InlineService {
               reply_markup: {
                 inline_keyboard: [
                   [
-                    { text: '⏳ Downloading...', callback_data: `inline_wait:spot_${parsed.id}` }
+                    { text: '⬇️ Скачать (320 kbps MP3)', callback_data: `inline_dl:spot_${parsed.id}` }
                   ]
                 ]
               }
@@ -324,7 +324,7 @@ class InlineService {
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '⏳ Downloading...', callback_data: `inline_wait:ig` }
+              { text: '⬇️ Скачать видео', callback_data: `inline_dl:ig_${shortToken}` }
             ]
           ]
         }
@@ -332,10 +332,11 @@ class InlineService {
       return results;
     }
 
-    // 5. YouTube resolution (download directly into chat)
+    // 5. YouTube resolution (Shorts directly in-chat, long videos offer bot PM with quality selector + direct option)
     if (isYouTubeUrl(url)) {
       const shortToken = this.createShortLink(url);
-      let title = 'YouTube Video';
+      const isShort = url.includes('/shorts/');
+      let title = isShort ? 'YouTube Short' : 'YouTube Video';
       let author = 'YouTube';
       let thumb = 'https://cdn-icons-png.flaticon.com/128/1384/1384060.png';
 
@@ -347,24 +348,72 @@ class InlineService {
         if (res.data?.thumbnail_url) thumb = res.data.thumbnail_url;
       } catch {}
 
-      results.push({
-        type: 'article',
-        id: `yt_${shortToken}`,
-        title: title,
-        description: `${author} • Tap to download into this chat`,
-        thumb_url: thumb,
-        input_message_content: {
-          message_text: `⏳ <b>Downloading:</b> ${escapeHtml(title)}...`,
-          parse_mode: 'HTML'
-        },
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '⏳ Downloading...', callback_data: `inline_wait:yt` }
+      if (isShort) {
+        // Shorts download directly into chat
+        results.push({
+          type: 'article',
+          id: `yt_${shortToken}`,
+          title: `⚡ ${title}`,
+          description: `${author} • YouTube Short • Нажмите для загрузки в чат`,
+          thumb_url: thumb,
+          input_message_content: {
+            message_text: `⏳ <b>Downloading Short:</b> ${escapeHtml(title)}...`,
+            parse_mode: 'HTML'
+          },
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '⬇️ Скачать Shorts в чат', callback_data: `inline_dl:yt_${shortToken}` }
+              ]
             ]
-          ]
-        }
-      });
+          }
+        });
+      } else {
+        // Full YouTube videos: primary choice redirects to bot PM with quality selector (1080p/720p/MP3)
+        results.push({
+          type: 'article',
+          id: `yt_pm_${shortToken}`,
+          title: `🎬 ${title}`,
+          description: `${author} • Выбор качества в боте (1080p / 720p / MP3)`,
+          thumb_url: thumb,
+          input_message_content: {
+            message_text: (
+              `🎬 <b>${escapeHtml(title)}</b>\n` +
+              `👤 <i>${escapeHtml(author)}</i>\n\n` +
+              `<i>Нажмите кнопку ниже, чтобы выбрать качество видео (1080p, 720p, 480p или MP3) в боте:</i>`
+            ),
+            parse_mode: 'HTML'
+          },
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '🚀 Скачать в боте (1080p / 720p / MP3)', url: `https://t.me/${botUsername}?start=${shortToken}` }
+              ]
+            ]
+          }
+        });
+
+        // Also offer direct in-chat download card for convenience
+        results.push({
+          type: 'article',
+          id: `yt_${shortToken}`,
+          title: `⚡ Скачать прямо в чат: ${title}`,
+          description: `${author} • Загрузка видео в этот чат`,
+          thumb_url: thumb,
+          input_message_content: {
+            message_text: `⏳ <b>Downloading:</b> ${escapeHtml(title)}...`,
+            parse_mode: 'HTML'
+          },
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '⬇️ Скачать видео в этот чат', callback_data: `inline_dl:yt_${shortToken}` }
+              ]
+            ]
+          }
+        });
+      }
+
       return results;
     }
 
@@ -383,7 +432,7 @@ class InlineService {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: '⏳ Downloading...', callback_data: `inline_wait:gen` }
+            { text: '⬇️ Скачать медиа', callback_data: `inline_dl:gen_${shortToken}` }
           ]
         ]
       }
@@ -437,7 +486,7 @@ class InlineService {
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '⏳ Downloading...', callback_data: `inline_wait:${track.youtubeId}` }
+                { text: '⬇️ Скачать (320 kbps MP3)', callback_data: `inline_dl:song_${track.youtubeId}` }
               ]
             ]
           }

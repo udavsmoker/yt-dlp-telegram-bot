@@ -92,6 +92,27 @@ describe('Inline Mode Service & Handlers', () => {
       assert.ok(results[0].id.startsWith('spot_'));
       assert.ok(results[0].title);
     });
+
+    it('should offer bot PM quality selector for regular long YouTube videos', async () => {
+      const ytUrl = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+      const results = await inlineService.handleQuery(ytUrl, 'test_bot');
+      assert.ok(results.length >= 2);
+      const pmCard = results[0];
+      assert.ok(pmCard.id.startsWith('yt_pm_'));
+      assert.ok(pmCard.reply_markup.inline_keyboard[0][0].url.includes('t.me/test_bot?start='));
+      const directCard = results[1];
+      assert.ok(directCard.id.startsWith('yt_'));
+      assert.ok(directCard.reply_markup.inline_keyboard[0][0].callback_data.startsWith('inline_dl:yt_'));
+    });
+
+    it('should offer direct in-chat download for YouTube Shorts', async () => {
+      const shortsUrl = 'https://www.youtube.com/shorts/abcdef12345';
+      const results = await inlineService.handleQuery(shortsUrl, 'test_bot');
+      assert.ok(results.length >= 1);
+      assert.equal(results[0].type, 'article');
+      assert.ok(results[0].id.startsWith('yt_'));
+      assert.ok(results[0].reply_markup.inline_keyboard[0][0].callback_data.startsWith('inline_dl:yt_'));
+    });
   });
 
   describe('Short Link Management', () => {
@@ -128,7 +149,7 @@ describe('Inline Mode Service & Handlers', () => {
       assert.ok(first.type === 'article' || first.type === 'audio');
       assert.ok(first.title);
       if (first.type === 'article') {
-        assert.ok(first.reply_markup.inline_keyboard[0][0].text.includes('Downloading'));
+        assert.ok(first.reply_markup.inline_keyboard[0][0].callback_data.startsWith('inline_dl:song_'));
       }
     });
 

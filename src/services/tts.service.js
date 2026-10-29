@@ -7,7 +7,40 @@ const config = require('../config');
 const logger = require('../utils/logger');
 const { generateFilename, ensureDir } = require('../utils/helpers');
 
+const VOICE_PRESETS = {
+  normal: null,
+  default: null,
+  demon: 'rubberband=pitch=0.72',
+  bass: 'rubberband=pitch=0.72',
+  chipmunk: 'rubberband=pitch=1.45',
+  anime: 'rubberband=pitch=1.45',
+  robot: 'rubberband=pitch=0.9,flanger=delay=1.5:depth=2:regen=60:speed=0.5,aecho=0.8:0.88:30:0.4',
+  radio: 'highpass=f=1000,lowpass=f=3000,volume=1.5',
+  slow: 'atempo=0.82',
+  fast: 'atempo=1.35'
+};
+
 class TtsService {
+  /**
+   * Get audio filter for a given voice name/preset.
+   * @param {string} voice
+   * @returns {string|null}
+   */
+  getFilterForVoice(voice) {
+    if (!voice) return null;
+    const key = String(voice).toLowerCase().replace(/^[-/]+/, '').trim();
+    return VOICE_PRESETS[key] || null;
+  }
+
+  /**
+   * Pick a random voice preset for Markov/bot voice messages.
+   * @returns {string}
+   */
+  getRandomVoice() {
+    const pool = ['normal', 'demon', 'chipmunk', 'robot', 'radio'];
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
   /**
    * Split text into digestible chunks for TTS API (max 180 chars per chunk)
    * @param {string} text
@@ -55,12 +88,14 @@ class TtsService {
   /**
    * Synthesize text to speech and convert directly to Telegram Voice Note (.ogg Opus).
    * @param {string} text - Text to synthesize
-   * @param {object} [options={}] - { lang: 'ru', signal }
+   * @param {object} [options={}] - { lang: 'ru', voice: 'normal', signal }
    * @returns {Promise<{ filePath: string, duration: number }>}
    */
   async synthesizeToOggOpus(text, options = {}) {
     await ensureDir(config.download.tempDir);
     const lang = options.lang || 'ru';
+    const voice = options.voice || 'normal';
+    const filter = this.getFilterForVoice(voice);
     const signal = options.signal;
 
     const chunks = this.splitIntoChunks(text, 180);
@@ -96,14 +131,12 @@ class TtsService {
 
       if (tempFiles.length === 1) {
         // Single chunk: convert directly to Telegram OGG Opus
-        await execFile('ffmpeg', [
-          '-y',
-          '-i', tempFiles[0],
-          '-c:a', 'libopus',
-          '-b:a', '32k',
-          '-vbr', 'on',
-          outputPath
-        ], { timeout: 30000, signal });
+        const ffmpegArgs = ['-y', '-i', tempFiles[0]];
+        if (filter) {
+          ffmpegArgs.push('-af', filter);
+        }
+        ffmpegArgs.push('-c:a', 'libopus', '-b:a', '32k', '-vbr', 'on', outputPath);
+        await execFile('ffmpeg', ffmpegArgs, { timeout: 30000, signal });
       } else {
         // Multiple chunks: concatenate and convert
         const listFile = path.join(config.download.tempDir, `concat_${Date.now()}.txt`);
@@ -111,16 +144,12 @@ class TtsService {
         const listContent = tempFiles.slice(0, -1).map(f => `file '${f}'`).join('\n');
         await fs.writeFile(listFile, listContent, 'utf8');
 
-        await execFile('ffmpeg', [
-          '-y',
-          '-f', 'concat',
-          '-safe', '0',
-          '-i', listFile,
-          '-c:a', 'libopus',
-          '-b:a', '32k',
-          '-vbr', 'on',
-          outputPath
-        ], { timeout: 60000, signal });
+        const ffmpegArgs = ['-y', '-f', 'concat', '-safe', '0', '-i', listFile];
+        if (filter) {
+          ffmpegArgs.push('-af', filter);
+        }
+        ffmpegArgs.push('-c:a', 'libopus', '-b:a', '32k', '-vbr', 'on', outputPath);
+        await execFile('ffmpeg', ffmpegArgs, { timeout: 60000, signal });
       }
 
       // Probe duration
@@ -149,3 +178,4 @@ class TtsService {
 }
 
 module.exports = new TtsService();
+

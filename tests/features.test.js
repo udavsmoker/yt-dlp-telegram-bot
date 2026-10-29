@@ -2,6 +2,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
 const ttsService = require('../src/services/tts.service');
+const { parseTtsArgs } = require('../src/handlers/tts.handler');
 const { parseTagText } = require('../src/handlers/tag.handler');
 const { parseTimestamp } = require('../src/handlers/cut.handler');
 const demotivatorService = require('../src/services/demotivator.service');
@@ -35,6 +36,52 @@ describe('New Features: TTS, Audio Tagging, Media Cut, Custom Demotivator', () =
       assert.ok(chunks.length >= 2);
       for (const chunk of chunks) {
         assert.ok(chunk.length <= 60); // allowable boundary
+      }
+    });
+  });
+
+  describe('TTS Voice Presets and Argument Parsing', () => {
+    it('should parse voice flags correctly', () => {
+      const res1 = parseTtsArgs('-demon Привет кожаные мешки');
+      assert.equal(res1.voice, 'demon');
+      assert.equal(res1.text, 'Привет кожаные мешки');
+
+      const res2 = parseTtsArgs('-chipmunk Писклявый текст');
+      assert.equal(res2.voice, 'chipmunk');
+      assert.equal(res2.text, 'Писклявый текст');
+
+      const res3 = parseTtsArgs('-robot Робот говорит');
+      assert.equal(res3.voice, 'robot');
+      assert.equal(res3.text, 'Робот говорит');
+    });
+
+    it('should parse language flags correctly', () => {
+      const res = parseTtsArgs('-en Hello world from tests');
+      assert.equal(res.lang, 'en');
+      assert.equal(res.text, 'Hello world from tests');
+    });
+
+    it('should parse combined voice and language flags', () => {
+      const res = parseTtsArgs('-demon -en Hello dark world');
+      assert.equal(res.voice, 'demon');
+      assert.equal(res.lang, 'en');
+      assert.equal(res.text, 'Hello dark world');
+    });
+
+    it('should resolve audio filters for known voice presets', () => {
+      assert.ok(ttsService.getFilterForVoice('demon').includes('pitch=0.72'));
+      assert.ok(ttsService.getFilterForVoice('chipmunk').includes('pitch=1.45'));
+      assert.ok(ttsService.getFilterForVoice('robot').includes('flanger'));
+      assert.ok(ttsService.getFilterForVoice('radio').includes('highpass'));
+      assert.equal(ttsService.getFilterForVoice('normal'), null);
+      assert.equal(ttsService.getFilterForVoice('unknown_voice'), null);
+    });
+
+    it('should return random voice from expected pool', () => {
+      const allowed = ['normal', 'demon', 'chipmunk', 'robot', 'radio'];
+      for (let i = 0; i < 20; i++) {
+        const v = ttsService.getRandomVoice();
+        assert.ok(allowed.includes(v));
       }
     });
   });
@@ -117,3 +164,4 @@ describe('New Features: TTS, Audio Tagging, Media Cut, Custom Demotivator', () =
     });
   });
 });
+

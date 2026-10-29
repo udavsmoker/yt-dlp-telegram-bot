@@ -108,9 +108,10 @@ async function markovResponseHandler(ctx, next) {
       if (response.length <= 250 && roll >= 0.15 && roll < 0.35) {
         let voiceResult = null;
         try {
-          logger.info(`Sending Markov TTS voice note to chat ${chatId}`);
+          const randomVoice = ttsService.getRandomVoice();
+          logger.info(`Sending Markov TTS voice note (voice: ${randomVoice}) to chat ${chatId}`);
           await ctx.sendChatAction('record_voice');
-          voiceResult = await ttsService.synthesizeToOggOpus(response);
+          voiceResult = await ttsService.synthesizeToOggOpus(response, { voice: randomVoice });
           const sent = await ctx.replyWithVoice(getFileForTelegram(voiceResult.filePath), {
             duration: voiceResult.duration || undefined
           });

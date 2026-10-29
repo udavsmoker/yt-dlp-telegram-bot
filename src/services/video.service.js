@@ -1,6 +1,8 @@
 const youtubedlExec = require('youtube-dl-exec');
 const path = require('path');
 const fs = require('fs').promises;
+const { promisify } = require('util');
+const execFile = promisify(require('child_process').execFile);
 const axios = require('axios');
 const { generateFilename, ensureDir, prepareThumbnail, generateThumbnailFromVideo, formatFileSize, formatDuration, getYtdlpPath } = require('../utils/helpers');
 const config = require('../config');
@@ -30,6 +32,10 @@ class VideoService {
     if (typeof options === 'function') {
       onProgress = options;
       options = {};
+    }
+
+    if (options.signal?.aborted) {
+      throw new Error('DOWNLOAD_CANCELLED');
     }
 
     try {
@@ -168,6 +174,7 @@ class VideoService {
             output: outputTemplate,
             format: strategy.format,
             mergeOutputFormat: 'mp4',
+            noPlaylist: true,
             noWarnings: true,
             noCheckCertificates: true,
             preferFreeFormats: true,
@@ -315,15 +322,14 @@ class VideoService {
           
           // Re-encode if VP9/HEVC slipped through
           try {
-            const { execFileSync } = require('child_process');
-            
-            const codecName = execFileSync('ffprobe', [
+            const { stdout: codecStdout } = await execFile('ffprobe', [
               '-v', 'error',
               '-select_streams', 'v:0',
               '-show_entries', 'stream=codec_name',
               '-of', 'default=noprint_wrappers=1:nokey=1',
               downloadedFilePath
-            ], { encoding: 'utf8', timeout: 5000 }).trim().toLowerCase();
+            ], { encoding: 'utf8', timeout: 5000, signal: options.signal });
+            const codecName = (codecStdout || '').trim().toLowerCase();
             
             logger.info(`Video codec: ${codecName}`);
             
@@ -337,7 +343,7 @@ class VideoService {
               
               const reencoded = downloadedFilePath.replace(/\.(mp4|mkv|webm)$/, '_h264.mp4');
               
-              execFileSync('ffmpeg', [
+              await execFile('ffmpeg', [
                 '-i', downloadedFilePath,
                 '-c:v', 'libx264',
                 '-profile:v', 'baseline',
@@ -349,7 +355,7 @@ class VideoService {
                 '-b:a', '128k',
                 '-movflags', '+faststart',
                 reencoded
-              ], { stdio: 'ignore', timeout: 120000 });
+              ], { timeout: 120000, signal: options.signal });
               
               await fs.unlink(downloadedFilePath);
               await fs.rename(reencoded, downloadedFilePath);
@@ -357,6 +363,7 @@ class VideoService {
               logger.info('Re-encoding complete');
             }
           } catch (codecError) {
+            if (options.signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
             logger.warn(`Codec check failed: ${codecError.message} - continuing anyway`);
           }
           
@@ -373,18 +380,23 @@ class VideoService {
             logger.info(`File too large (${fileSizeMB.toFixed(2)}MB), trying lower quality...`);
           }
         } catch (error) {
+          if (options.signal?.aborted || error.message === 'DOWNLOAD_CANCELLED') {
+            throw new Error('DOWNLOAD_CANCELLED');
+          }
           logger.warn(`Failed to download with ${strategy.name}: ${error.message}`);
         }
       }
 
       if (!downloadedFilePath) {
-          if (lastYtdlpError) {
-            let m = lastYtdlpError.match(/ERROR:\s*\[.*?\][^:]*:\s*(.*)/i);
-            if (!m) m = lastYtdlpError.match(/ERROR:\s*(.*)/i);
-            if (m && m[1]) {
-              throw new Error(`YTDLP_ERROR:${m[1].trim()}`);
-            }
+        if (lastYtdlpError) {
+          let m = lastYtdlpError.match(/ERROR:\s*\[.*?\][^:]*:\s*(.*)/i);
+          if (!m) m = lastYtdlpError.match(/ERROR:\s*(.*)/i);
+          if (m && m[1]) {
+            throw new Error(`YTDLP_ERROR:${m[1].trim()}`);
           }
+          throw new Error(`YTDLP_ERROR:${lastYtdlpError.trim()}`);
+        }
+        throw new Error('Failed to download video: no file was created.');
       }
 
       const stats = await fs.stat(downloadedFilePath);
@@ -448,15 +460,14 @@ class VideoService {
       }
 
       try {
-        const { execFileSync } = require('child_process');
-        const metadata = execFileSync('ffprobe', [
+        const { stdout: metadata } = await execFile('ffprobe', [
           '-v', 'error',
           '-select_streams', 'v:0',
           '-show_entries', 'stream=width,height,duration:format=duration',
           '-show_entries', 'format_tags=title,artist,author,uploader,creator',
           '-of', 'json',
           downloadedFilePath
-        ], { encoding: 'utf8', timeout: 5000 });
+        ], { encoding: 'utf8', timeout: 5000, signal: options.signal });
         const parsed = JSON.parse(metadata);
         
         if (parsed.streams && parsed.streams[0]) {
@@ -517,6 +528,10 @@ class VideoService {
         }
       };
     } catch (error) {
+      if (error.message === 'DOWNLOAD_CANCELLED' || options.signal?.aborted) {
+        throw new Error('DOWNLOAD_CANCELLED');
+      }
+
       logger.error('Video download error:', error);
       
       if (error.message.includes('Unsupported URL')) {
@@ -570,24 +585,36 @@ class VideoService {
 
 
 
-  async downloadTikTokSlideshow(url, onProgress = null) {
-    return await tiktokService.downloadTikTokSlideshow(url, onProgress);
+  async downloadTikTokSlideshow(url, options = {}, onProgress = null) {
+    if (typeof options === 'function') {
+      onProgress = options;
+      options = {};
+    }
+    return await tiktokService.downloadTikTokSlideshow(url, options, onProgress);
   }
 
   /**
    * Download Instagram post (photos/videos) using instagram-url-direct
    * Delegates to instagramService for the actual download
    */
-  async downloadInstagramPost(url, imgIndex = null, onProgress = null) {
-    return await instagramService.downloadInstagramPost(url, imgIndex, onProgress);
+  async downloadInstagramPost(url, imgIndex = null, options = {}, onProgress = null) {
+    if (typeof options === 'function') {
+      onProgress = options;
+      options = {};
+    }
+    return await instagramService.downloadInstagramPost(url, imgIndex, options, onProgress);
   }
 
   /**
    * Download Bluesky post (video/images) using the AT Protocol API
    * Delegates to blueskyService for the actual download
    */
-  async downloadBlueskyPost(url, onProgress = null) {
-    return await blueskyService.downloadBlueskyPost(url, onProgress);
+  async downloadBlueskyPost(url, options = {}, onProgress = null) {
+    if (typeof options === 'function') {
+      onProgress = options;
+      options = {};
+    }
+    return await blueskyService.downloadBlueskyPost(url, options, onProgress);
   }
 }
 

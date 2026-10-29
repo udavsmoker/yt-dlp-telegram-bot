@@ -234,4 +234,28 @@ describe('Cancel Handler & Download Cancellation', () => {
       assert.match(replyText, /No active downloads to cancel/);
     });
   });
+
+  describe('Service Abort & Cancellation Signals', () => {
+    it('AudioService.convertToMp3 should respect aborted signal', async () => {
+      const audioService = require('../src/services/audio.service');
+      const ac = new AbortController();
+      ac.abort();
+
+      await assert.rejects(
+        audioService.convertToMp3('/non/existent/path.mp4', null, { signal: ac.signal }),
+        (err) => err.name === 'AbortError' || err.message.includes('abort') || err.message.includes('cancelled')
+      );
+    });
+
+    it('VideoService.download should immediately throw DOWNLOAD_CANCELLED if signal is aborted', async () => {
+      const videoService = require('../src/services/video.service');
+      const ac = new AbortController();
+      ac.abort();
+
+      await assert.rejects(
+        videoService.download('https://youtube.com/watch?v=123', { signal: ac.signal }),
+        { message: 'DOWNLOAD_CANCELLED' }
+      );
+    });
+  });
 });

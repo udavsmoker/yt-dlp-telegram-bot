@@ -199,7 +199,7 @@ class YouTubeStrategy extends BaseStrategy {
       );
       if (served) return;
 
-      await queueService.enqueue(async () => {
+      await queueService.enqueue(async ({ signal }) => {
         const progressReporter = queueService.createProgressReporter(ctx, statusMessage.message_id);
         const onProgress = ({ percent, speed, eta }) => {
           progressReporter.update(renderProgressBar(percent, speed, eta));
@@ -213,7 +213,7 @@ class YouTubeStrategy extends BaseStrategy {
             '⬇️ Downloading video...\nThis may take a moment for large videos.'
           );
 
-          const result = await videoService.download(url, downloadOptions, onProgress);
+          const result = await videoService.download(url, { ...downloadOptions, signal }, onProgress);
           progressReporter.stop();
           filePath = result.filePath;
           thumbnailPath = result.thumbnailPath;
@@ -278,7 +278,7 @@ class YouTubeStrategy extends BaseStrategy {
         return;
       }
 
-      await queueService.enqueue(async () => {
+      await queueService.enqueue(async ({ signal }) => {
         const progressReporter = queueService.createProgressReporter(ctx, statusMessage.message_id);
         const onProgress = ({ percent, speed, eta }) => {
           progressReporter.update(renderProgressBar(percent, speed, eta));
@@ -294,7 +294,8 @@ class YouTubeStrategy extends BaseStrategy {
 
           const result = await videoService.download(url, {
             format: 'bestaudio[ext=m4a]/bestaudio/best',
-            qualityName: 'best audio'
+            qualityName: 'best audio',
+            signal
           }, onProgress);
 
           progressReporter.stop();
@@ -308,7 +309,7 @@ class YouTubeStrategy extends BaseStrategy {
             '🎵 Converting & uploading audio...'
           );
 
-          const audioResult = await audioService.convertToMp3(filePath, thumbnailPath);
+          const audioResult = await audioService.convertToMp3(filePath, thumbnailPath, { signal });
 
           const audioOptions = {
             title: result.info?.title || audioResult.title || 'Audio',

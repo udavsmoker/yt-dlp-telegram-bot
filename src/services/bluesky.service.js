@@ -1,5 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
+const { promisify } = require('util');
+const execFile = promisify(require('child_process').execFile);
 const axios = require('axios');
 const { generateFilename, ensureDir, generateThumbnailFromVideo, formatFileSize } = require('../utils/helpers');
 const config = require('../config');
@@ -75,7 +77,12 @@ class BlueskyService {
    * Returns a result object compatible with the download handler
    * (same shape as TikTok/Instagram services).
    */
-  async downloadBlueskyPost(url, onProgress = null) {
+  async downloadBlueskyPost(url, options = {}, onProgress = null) {
+    if (typeof options === 'function') {
+      onProgress = options;
+      options = {};
+    }
+
     try {
       logger.info(`Downloading Bluesky post: ${url}`);
       await ensureDir(config.download.tempDir);
@@ -94,12 +101,12 @@ class BlueskyService {
 
       // Video post
       if (embedType === 'app.bsky.embed.video#view') {
-        return await this._downloadVideo(post, did, author, postText, onProgress);
+        return await this._downloadVideo(post, did, author, postText, options, onProgress);
       }
 
       // Image post
       if (embedType === 'app.bsky.embed.images#view') {
-        return await this._downloadImages(post, author, postText);
+        return await this._downloadImages(post, author, postText, options);
       }
 
       // Record with media (quote post with images/video)
@@ -108,11 +115,11 @@ class BlueskyService {
         if (innerEmbed?.$type === 'app.bsky.embed.video#view') {
           // Substitute inner embed as the post embed for download
           const modifiedPost = { ...post, embed: innerEmbed };
-          return await this._downloadVideo(modifiedPost, did, author, postText, onProgress);
+          return await this._downloadVideo(modifiedPost, did, author, postText, options, onProgress);
         }
         if (innerEmbed?.$type === 'app.bsky.embed.images#view') {
           const modifiedPost = { ...post, embed: innerEmbed };
-          return await this._downloadImages(modifiedPost, author, postText);
+          return await this._downloadImages(modifiedPost, author, postText, options);
         }
       }
 
@@ -138,7 +145,16 @@ class BlueskyService {
    * Primary: direct blob download (original MP4, best quality).
    * The blob CID comes from the record's embed, not the view.
    */
-  async _downloadVideo(post, did, author, postText, onProgress = null) {
+  async _downloadVideo(post, did, author, postText, options = {}, onProgress = null) {
+    if (typeof options === 'function') {
+      onProgress = options;
+      options = {};
+    }
+    const signal = options?.signal;
+    if (signal?.aborted) {
+      throw new Error('DOWNLOAD_CANCELLED');
+    }
+
     logger.info('Downloading Bluesky video via blob API');
 
     // Extract video CID from the record embed (original blob reference)
@@ -180,6 +196,7 @@ class BlueskyService {
         responseType: 'stream',
         timeout: 15000, // 15s to establish connection
         maxRedirects: 5,
+        signal,
         headers: {
           'Accept': '*/*'
         }
@@ -197,6 +214,31 @@ class BlueskyService {
       const startTime = Date.now();
 
       await new Promise((resolve, reject) => {
+        let cleanupAbort = null;
+        if (signal) {
+          if (signal.aborted) {
+            response.data.destroy();
+            writer.destroy();
+            return reject(new Error('DOWNLOAD_CANCELLED'));
+          }
+          const onAbort = () => {
+            response.data.destroy();
+            writer.destroy();
+            reject(new Error('DOWNLOAD_CANCELLED'));
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+          cleanupAbort = () => signal.removeEventListener('abort', onAbort);
+        }
+
+        const onFinish = () => {
+          if (cleanupAbort) cleanupAbort();
+          resolve();
+        };
+        const onError = (err) => {
+          if (cleanupAbort) cleanupAbort();
+          reject(err);
+        };
+
         response.data.on('data', (chunk) => {
           downloadedBytes += chunk.length;
           if (onProgress && totalExpected > 0) {
@@ -214,19 +256,22 @@ class BlueskyService {
           if (downloadedBytes > maxSize) {
             response.data.destroy();
             writer.destroy();
-            reject(new Error('Video exceeds maximum file size during download'));
+            onError(new Error('Video exceeds maximum file size during download'));
           }
         });
         response.data.pipe(writer);
-        writer.on('finish', resolve);
-        writer.on('error', reject);
-        response.data.on('error', reject);
+        writer.on('finish', onFinish);
+        writer.on('error', onError);
+        response.data.on('error', onError);
       });
 
       logger.info(`Blob downloaded: ${(downloadedBytes / 1024 / 1024).toFixed(2)} MB`);
     } catch (blobError) {
       // Clean up partial file
       await fs.unlink(videoPath).catch(() => {});
+      if (signal?.aborted || blobError.message === 'DOWNLOAD_CANCELLED') {
+        throw new Error('DOWNLOAD_CANCELLED');
+      }
       logger.error(`Blob download failed: ${blobError.message}`);
       throw new Error(`Failed to download Bluesky video: ${blobError.message}`);
     }
@@ -246,14 +291,13 @@ class BlueskyService {
     }
 
     try {
-      const { execFileSync } = require('child_process');
-      const probeOutput = execFileSync('ffprobe', [
+      const { stdout: probeOutput } = await execFile('ffprobe', [
         '-v', 'error',
         '-select_streams', 'v:0',
         '-show_entries', 'stream=width,height,duration:format=duration',
         '-of', 'json',
         videoPath
-      ], { encoding: 'utf8', timeout: 10000 });
+      ], { encoding: 'utf8', timeout: 10000, signal });
       const probeData = JSON.parse(probeOutput);
 
       if (probeData.streams && probeData.streams[0]) {
@@ -315,7 +359,10 @@ class BlueskyService {
    * Download images from a Bluesky post.
    * Uses fullsize CDN URLs from the embed view.
    */
-  async _downloadImages(post, author, postText) {
+  async _downloadImages(post, author, postText, options = {}) {
+    const signal = options?.signal;
+    if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
+
     const images = post.embed?.images;
 
     if (!Array.isArray(images) || images.length === 0) {
@@ -328,6 +375,7 @@ class BlueskyService {
     let totalBytes = 0;
 
     for (let i = 0; i < images.length; i++) {
+      if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
       const img = images[i];
       const imageUrl = img.fullsize || img.thumb;
 
@@ -343,6 +391,7 @@ class BlueskyService {
         const response = await axios.get(imageUrl, {
           responseType: 'arraybuffer',
           timeout: 30000,
+          signal,
           headers: {
             'Accept': 'image/*,*/*'
           }

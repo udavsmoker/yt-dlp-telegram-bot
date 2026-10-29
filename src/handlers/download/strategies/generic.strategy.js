@@ -34,7 +34,7 @@ class GenericStrategy extends BaseStrategy {
         return;
       }
 
-      await queueService.enqueue(async () => {
+      await queueService.enqueue(async ({ signal }) => {
         const progressReporter = queueService.createProgressReporter(ctx, statusMessage.message_id);
         const onProgress = ({ percent, speed, eta }) => {
           progressReporter.update(renderProgressBar(percent, speed, eta));
@@ -48,7 +48,7 @@ class GenericStrategy extends BaseStrategy {
             '⬇️ Downloading video...\nThis may take a moment for large videos.'
           );
 
-          const result = await videoService.download(url, {}, onProgress);
+          const result = await videoService.download(url, { signal }, onProgress);
           progressReporter.stop();
 
           // Handle image/slideshow responses from generic extractors

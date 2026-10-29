@@ -1,6 +1,8 @@
 const TiktokDL = require('@tobyg74/tiktok-api-dl');
 const fs = require('fs').promises;
 const path = require('path');
+const { promisify } = require('util');
+const execFile = promisify(require('child_process').execFile);
 const axios = require('axios');
 const { generateFilename, ensureDir, generateThumbnailFromVideo } = require('../utils/helpers');
 const config = require('../config');
@@ -11,7 +13,12 @@ class TikTokService {
    * Download TikTok content (video or slideshow) using the TikTok API
    * This is used as a fallback when yt-dlp fails
    */
-  async downloadTikTokContent(url, onProgress = null) {
+  async downloadTikTokContent(url, options = {}, onProgress = null) {
+    if (typeof options === 'function') {
+      onProgress = options;
+      options = {};
+    }
+
     try {
       logger.info(`Downloading TikTok content using @tobyg74/tiktok-api-dl: ${url}`);
       
@@ -23,7 +30,7 @@ class TikTokService {
           if (r.status !== 'success') throw new Error('v3 failed');
           return r;
         }),
-        axios.post('https://www.tikwm.com/api/', { url: url, hd: 1 }, { timeout: 15000 }).then(r => {
+        axios.post('https://www.tikwm.com/api/', { url: url, hd: 1 }, { timeout: 15000, signal: options?.signal }).then(r => {
           if (!r.data || r.data.code !== 0) throw new Error(r.data?.msg || 'tikwm failed');
           return r.data.data;
         })
@@ -49,8 +56,8 @@ class TikTokService {
         }
         const data = result.result;
         logger.info(`TikTok data type: ${data.type}`);
-        if (data.type === 'video') return await this._downloadVideo(data, url, onProgress);
-        if (data.type === 'image') return await this._downloadSlideshow(data, result);
+        if (data.type === 'video') return await this._downloadVideo(data, url, options, onProgress);
+        if (data.type === 'image') return await this._downloadSlideshow(data, result, options);
         throw new Error(`Unknown TikTok content type: ${data.type}`);
       }
 
@@ -87,7 +94,7 @@ class TikTokService {
         logger.info(`Merged ${mergedData._videoUrls.length} video URLs from APIs`);
         logger.debug(`URL priorities: ${mergedData._videoUrls.map(u => u.quality).join(' > ')}`);
 
-        return await this._downloadVideo(mergedData, url, onProgress);
+        return await this._downloadVideo(mergedData, url, options, onProgress);
       }
       
       // Handle slideshow/image type
@@ -99,7 +106,7 @@ class TikTokService {
           author: { nickname: twData.author?.nickname || twData.author?.unique_id },
           music: twData.music_info?.play ? { playUrl: [twData.music_info.play] } : undefined
         } : v3Data;
-        return await this._downloadSlideshow(data, { result: data });
+        return await this._downloadSlideshow(data, { result: data }, options);
       }
 
       throw new Error(`Unknown TikTok content type: ${contentType}`);
@@ -112,7 +119,14 @@ class TikTokService {
   /**
    * Download TikTok video using API data
    */
-  async _downloadVideo(data, originalUrl, onProgress = null) {
+  async _downloadVideo(data, originalUrl, options = {}, onProgress = null) {
+    if (typeof options === 'function') {
+      onProgress = options;
+      options = {};
+    }
+    const signal = options?.signal;
+    if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
+
     logger.info('Downloading TikTok video via API');
     
     // Helper to extract URL from value (could be string, array of strings, or array of objects)
@@ -162,6 +176,7 @@ class TikTokService {
       let lastError = null;
 
       for (const item of videoUrls) {
+        if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
         try {
           logger.info(`Trying to download ${item.quality} video URL...`);
           const streamResponse = await axios.get(item.url, {
@@ -171,6 +186,7 @@ class TikTokService {
               'Referer': 'https://www.tiktok.com/',
               'Accept': '*/*'
             },
+            signal,
             timeout: 15000 // 15 sec to establish connection and get headers
           });
 
@@ -187,6 +203,31 @@ class TikTokService {
           const startTime = Date.now();
           
           await new Promise((resolve, reject) => {
+            let cleanupAbort = null;
+            if (signal) {
+              if (signal.aborted) {
+                streamResponse.data.destroy();
+                writer.destroy();
+                return reject(new Error('DOWNLOAD_CANCELLED'));
+              }
+              const onAbort = () => {
+                streamResponse.data.destroy();
+                writer.destroy();
+                reject(new Error('DOWNLOAD_CANCELLED'));
+              };
+              signal.addEventListener('abort', onAbort, { once: true });
+              cleanupAbort = () => signal.removeEventListener('abort', onAbort);
+            }
+
+            const onFinish = () => {
+              if (cleanupAbort) cleanupAbort();
+              resolve();
+            };
+            const onError = (err) => {
+              if (cleanupAbort) cleanupAbort();
+              reject(err);
+            };
+
             streamResponse.data.on('data', (chunk) => {
               downloadedBytes += chunk.length;
               if (onProgress && contentLength > 0) {
@@ -204,19 +245,23 @@ class TikTokService {
               if (downloadedBytes > maxFileSizeBytes) {
                 streamResponse.data.destroy();
                 writer.destroy();
-                reject(new Error(`maxContentLength size of ${maxFileSizeBytes} exceeded during streaming`));
+                onError(new Error(`maxContentLength size of ${maxFileSizeBytes} exceeded during streaming`));
               }
             });
             streamResponse.data.pipe(writer);
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-            streamResponse.data.on('error', reject);
+            writer.on('finish', onFinish);
+            writer.on('error', onError);
+            streamResponse.data.on('error', onError);
           });
           
           logger.info(`Successfully downloaded ${item.quality} video URL`);
           videoResponse = true;
           break; // Success
         } catch (err) {
+          if (signal?.aborted || err.message === 'DOWNLOAD_CANCELLED') {
+            await fs.unlink(videoPath).catch(() => {});
+            throw new Error('DOWNLOAD_CANCELLED');
+          }
           logger.warn(`Failed to download ${item.quality} video URL: ${err.message}`);
           lastError = err;
           await fs.unlink(videoPath).catch(() => {}); // Clean up partial file
@@ -234,16 +279,15 @@ class TikTokService {
       const musicUrl = extractUrl(data.music?.playUrl) || extractUrl(data.music?.play_url);
       if (musicUrl) {
         try {
-          const { execFileSync } = require('child_process');
           // Probe audio bitrate of downloaded video
-          const audioBitrateStr = execFileSync('ffprobe', [
+          const { stdout: audioBitrateStr } = await execFile('ffprobe', [
             '-v', 'error',
             '-select_streams', 'a:0',
             '-show_entries', 'stream=bit_rate',
             '-of', 'default=noprint_wrappers=1:nokey=1',
             videoPath
-          ], { encoding: 'utf8', timeout: 10000 }).trim();
-          const audioBitrate = parseInt(audioBitrateStr) || 0;
+          ], { encoding: 'utf8', timeout: 10000, signal });
+          const audioBitrate = parseInt((audioBitrateStr || '').trim()) || 0;
           logger.info(`Video audio bitrate: ${Math.round(audioBitrate / 1000)}kbps`);
           
           if (audioBitrate > 0 && audioBitrate < 96000) {
@@ -255,7 +299,8 @@ class TikTokService {
                 'Referer': 'https://www.tiktok.com/',
                 'Accept': '*/*'
               },
-              timeout: 30000
+              timeout: 30000,
+              signal
             });
             
             const musicFilename = generateFilename('tiktok_music', 'mp3');
@@ -265,7 +310,7 @@ class TikTokService {
             // Merge: take video from original, audio from music track
             const mergedPath = videoPath.replace('.mp4', '_merged.mp4');
             
-            execFileSync('ffmpeg', [
+            await execFile('ffmpeg', [
               '-y',
               '-i', videoPath,
               '-i', musicPath,
@@ -275,7 +320,7 @@ class TikTokService {
               '-shortest',
               '-movflags', '+faststart',
               mergedPath
-            ], { stdio: 'ignore', timeout: 60000 });
+            ], { timeout: 60000, signal });
             
             // Replace original with merged version
             await fs.unlink(videoPath);
@@ -287,20 +332,21 @@ class TikTokService {
             logger.info('Audio quality is acceptable, skipping music merge');
           }
         } catch (musicError) {
+          if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
           logger.warn(`Music merge check failed, using original audio: ${musicError.message}`);
         }
       }
       
       // Check frame rate and re-encode if too high (>60fps causes playback issues on Telegram/mobile)
       try {
-        const { execFileSync } = require('child_process');
-        const fpsOutput = execFileSync('ffprobe', [
+        const { stdout: fpsOutputRaw } = await execFile('ffprobe', [
           '-v', 'error',
           '-select_streams', 'v:0',
           '-show_entries', 'stream=r_frame_rate',
           '-of', 'default=noprint_wrappers=1:nokey=1',
           finalVideoPath
-        ], { encoding: 'utf8', timeout: 10000 }).trim();
+        ], { encoding: 'utf8', timeout: 10000, signal });
+        const fpsOutput = (fpsOutputRaw || '').trim();
         
         // Parse frame rate (format: "120/1" or "30000/1001")
         const [num, den] = fpsOutput.split('/').map(Number);
@@ -313,7 +359,7 @@ class TikTokService {
           
           const reencodedPath = finalVideoPath.replace('.mp4', '_30fps.mp4');
           
-          execFileSync('ffmpeg', [
+          await execFile('ffmpeg', [
             '-i', finalVideoPath,
             '-r', '30',
             '-c:v', 'libx264',
@@ -323,7 +369,7 @@ class TikTokService {
             '-b:a', '128k',
             '-movflags', '+faststart',
             reencodedPath
-          ], { stdio: 'ignore', timeout: 180000 });
+          ], { timeout: 180000, signal });
           
           // Replace original with re-encoded version
           await fs.unlink(finalVideoPath);
@@ -339,6 +385,7 @@ class TikTokService {
           logger.info(`TikTok video downloaded: ${fileSizeMB}MB`);
         }
       } catch (fpsError) {
+        if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
         logger.warn(`Frame rate check failed: ${fpsError.message} - using original video`);
         const stats = await fs.stat(finalVideoPath);
         fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
@@ -351,14 +398,13 @@ class TikTokService {
       let width = 720, height = 1280;
       
       try {
-        const { execFileSync } = require('child_process');
-        const probeOutput = execFileSync('ffprobe', [
+        const { stdout: probeOutput } = await execFile('ffprobe', [
           '-v', 'error',
           '-select_streams', 'v:0',
           '-show_entries', 'stream=width,height,duration:format=duration',
           '-of', 'json',
           finalVideoPath
-        ], { encoding: 'utf8', timeout: 10000 });
+        ], { encoding: 'utf8', timeout: 10000, signal });
         const probeData = JSON.parse(probeOutput);
         
         if (probeData.streams && probeData.streams[0]) {
@@ -420,7 +466,10 @@ class TikTokService {
   /**
    * Download TikTok slideshow images
    */
-  async _downloadSlideshow(data, result) {
+  async _downloadSlideshow(data, result, options = {}) {
+    const signal = options?.signal;
+    if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
+
     const images = data.images || data.image || [];
       
     if (!Array.isArray(images) || images.length === 0) {
@@ -431,6 +480,7 @@ class TikTokService {
 
     const imagePaths = [];
     for (let i = 0; i < images.length; i++) {
+      if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
       const imageUrl = typeof images[i] === 'string' ? images[i] : images[i]?.url;
       
       if (!imageUrl) {
@@ -448,6 +498,7 @@ class TikTokService {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': 'https://www.tiktok.com/'
           },
+          signal,
           timeout: 30000
         });
 
@@ -455,6 +506,7 @@ class TikTokService {
         imagePaths.push(imagePath);
         logger.info(`Downloaded image ${i + 1}/${images.length}`);
       } catch (error) {
+        if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
         logger.warn(`Failed to download image ${i + 1}: ${error.message}`);
       }
     }
@@ -476,8 +528,12 @@ class TikTokService {
   }
 
   // Keep old method name for backwards compatibility
-  async downloadTikTokSlideshow(url, onProgress = null) {
-    return this.downloadTikTokContent(url, onProgress);
+  async downloadTikTokSlideshow(url, options = {}, onProgress = null) {
+    if (typeof options === 'function') {
+      onProgress = options;
+      options = {};
+    }
+    return this.downloadTikTokContent(url, options, onProgress);
   }
 }
 

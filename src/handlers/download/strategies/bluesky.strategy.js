@@ -33,7 +33,7 @@ class BlueskyStrategy extends BaseStrategy {
         return;
       }
 
-      await queueService.enqueue(async () => {
+      await queueService.enqueue(async ({ signal }) => {
         const progressReporter = queueService.createProgressReporter(ctx, statusMessage.message_id);
         const onProgress = ({ percent, speed, eta }) => {
           progressReporter.update(renderProgressBar(percent, speed, eta));
@@ -51,7 +51,7 @@ class BlueskyStrategy extends BaseStrategy {
 
           let result;
           try {
-            result = await videoService.downloadBlueskyPost(url, onProgress);
+            result = await videoService.downloadBlueskyPost(url, { signal }, onProgress);
             progressReporter.stop();
 
             if (result.type === 'video') {
@@ -126,7 +126,7 @@ class BlueskyStrategy extends BaseStrategy {
                 '⬇️ Trying fallback download method...'
               );
 
-              const fbResult = await videoService.download(url, {}, onProgress);
+              const fbResult = await videoService.download(url, { signal }, onProgress);
               progressReporter.stop();
 
               filePath = fbResult.filePath;

@@ -147,7 +147,7 @@ class InstagramStrategy extends BaseStrategy {
         return;
       }
 
-      await queueService.enqueue(async () => {
+      await queueService.enqueue(async ({ signal }) => {
         const progressReporter = queueService.createProgressReporter(ctx, statusMessage.message_id);
         const onProgress = ({ percent, speed, eta }) => {
           progressReporter.update(renderProgressBar(percent, speed, eta));
@@ -161,7 +161,7 @@ class InstagramStrategy extends BaseStrategy {
             '⬇️ Downloading Instagram post...'
           );
 
-          const result = await videoService.downloadInstagramPost(url, imgIndex, onProgress);
+          const result = await videoService.downloadInstagramPost(url, imgIndex, { signal }, onProgress);
           progressReporter.stop();
 
           // Fallback to yt-dlp if service indicates direct download did not yield media
@@ -173,7 +173,7 @@ class InstagramStrategy extends BaseStrategy {
               '⬇️ Downloading video...\nThis may take a moment for large videos.'
             );
 
-            const videoResult = await videoService.download(url, {}, onProgress);
+            const videoResult = await videoService.download(url, { signal }, onProgress);
             progressReporter.stop();
             filePath = videoResult.filePath;
             thumbnailPath = videoResult.thumbnailPath;

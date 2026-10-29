@@ -33,7 +33,7 @@ class TikTokStrategy extends BaseStrategy {
         return;
       }
 
-      await queueService.enqueue(async () => {
+      await queueService.enqueue(async ({ signal }) => {
         const progressReporter = queueService.createProgressReporter(ctx, statusMessage.message_id);
         const onProgress = ({ percent, speed, eta }) => {
           progressReporter.update(renderProgressBar(percent, speed, eta));
@@ -51,7 +51,7 @@ class TikTokStrategy extends BaseStrategy {
 
           let result;
           try {
-            result = await videoService.downloadTikTokSlideshow(url, onProgress);
+            result = await videoService.downloadTikTokSlideshow(url, { signal }, onProgress);
             progressReporter.stop();
 
             if (result.type === 'video') {
@@ -123,7 +123,7 @@ class TikTokStrategy extends BaseStrategy {
                 '⬇️ Trying fallback download method...'
               );
 
-              const fbResult = await videoService.download(url, {}, onProgress);
+              const fbResult = await videoService.download(url, { signal }, onProgress);
               progressReporter.stop();
 
               if (fbResult.type === 'slideshow' || fbResult.type === 'image') {

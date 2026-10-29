@@ -1,6 +1,8 @@
 const { igdl } = require('btch-downloader');
 const fs = require('fs').promises;
 const path = require('path');
+const { promisify } = require('util');
+const execFile = promisify(require('child_process').execFile);
 const axios = require('axios');
 const { generateFilename, ensureDir, generateThumbnailFromVideo, formatFileSize, formatDuration } = require('../utils/helpers');
 const config = require('../config');
@@ -34,7 +36,21 @@ class InstagramService {
    * Download Instagram content (photos or video) from a post URL
    * Handles single images, carousels, and videos/Reels
    */
-  async downloadInstagramPost(url, imgIndex = null, onProgress = null) {
+  async downloadInstagramPost(url, imgIndex = null, options = {}, onProgress = null) {
+    if (typeof options === 'function') {
+      onProgress = options;
+      options = {};
+    } else if (typeof imgIndex === 'function') {
+      onProgress = imgIndex;
+      imgIndex = null;
+      options = {};
+    } else if (typeof imgIndex === 'object' && imgIndex !== null && !Array.isArray(imgIndex)) {
+      options = imgIndex;
+      imgIndex = null;
+    }
+    const signal = options?.signal;
+    if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
+
     try {
       logger.info(`Downloading Instagram post using btch-downloader (igdl): ${url}`);
 
@@ -216,6 +232,7 @@ class InstagramService {
         const mediaPath = path.join(config.download.tempDir, `${filenamePrefix.replace(/\.$/, '')}_${i + 1}.${ext}`);
         
         try {
+          if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
           let response;
           const makeProgressHandler = () => (progressEvent) => {
             if (onProgress && progressEvent.total) {
@@ -239,11 +256,15 @@ class InstagramService {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Referer': 'https://www.instagram.com/'
               },
+              signal,
               timeout: mediaType === 'video' ? 60000 : 30000,
               maxContentLength: (config.download?.maxFileSizeMB || 50) * 1024 * 1024,
               onDownloadProgress: makeProgressHandler()
             });
           } catch (proxyErr) {
+            if (signal?.aborted || proxyErr.name === 'CanceledError' || proxyErr.name === 'AbortError') {
+              throw new Error('DOWNLOAD_CANCELLED');
+            }
             // Fall back to original URL if proxy fails
             if (mediaUrl !== detail.url) {
               logger.warn(`Proxy download failed for item ${i + 1}, falling back to original URL: ${proxyErr.message}`);
@@ -255,6 +276,7 @@ class InstagramService {
                   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                   'Referer': 'https://www.instagram.com/'
                 },
+                signal,
                 timeout: mediaType === 'video' ? 60000 : 30000,
                 maxContentLength: (config.download?.maxFileSizeMB || 50) * 1024 * 1024,
                 onDownloadProgress: makeProgressHandler()
@@ -279,6 +301,9 @@ class InstagramService {
           });
           logger.info(`Downloaded ${mediaType} ${i + 1}/${mediaDetails.length}`);
         } catch (downloadError) {
+          if (signal?.aborted || downloadError.message === 'DOWNLOAD_CANCELLED' || downloadError.name === 'CanceledError') {
+            throw new Error('DOWNLOAD_CANCELLED');
+          }
           logger.error(`Failed to download ${mediaType} ${i + 1}: ${downloadError.message}`);
         }
       }
@@ -298,14 +323,13 @@ class InstagramService {
       const firstVideo = downloadedMedia.find(m => m.type === 'video');
       if (firstVideo) {
         try {
-          const { execFileSync } = require('child_process');
-          const ffprobeRes = execFileSync('ffprobe', [
+          const { stdout: ffprobeRes } = await execFile('ffprobe', [
             '-v', 'error',
             '-select_streams', 'v:0',
             '-show_entries', 'stream=width,height,duration:format=duration',
             '-of', 'json',
             firstVideo.path
-          ], { encoding: 'utf8', timeout: 5000 });
+          ], { encoding: 'utf8', timeout: 5000, signal });
           const parsed = JSON.parse(ffprobeRes);
           if (parsed.streams && parsed.streams[0]) {
             videoWidth = parsed.streams[0].width || undefined;

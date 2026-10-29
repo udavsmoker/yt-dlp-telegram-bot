@@ -130,6 +130,7 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
 
     // Obtain Telegram file_id to edit the inline message
     let fileId = null;
+    let stagingMessage = null;
     const recipientId = ctx.from?.id || config.adminUserId;
 
     if (recipientId) {
@@ -138,13 +139,13 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
           title: result.title,
           performer: result.artist,
           duration: result.duration,
-          caption: `🎵 <b>${escapeHtml(result.title)}</b> — <i>${escapeHtml(result.artist)}</i>\nvia @${botUsername}`,
-          parse_mode: 'HTML',
+          disable_notification: true,
           ...(result.thumbnailPath ? { thumbnail: getFileForTelegram(result.thumbnailPath) } : {})
         });
 
         if (sent?.audio?.file_id) {
           fileId = sent.audio.file_id;
+          stagingMessage = { chatId: recipientId, messageId: sent.message_id };
         }
       } catch (dmErr) {
         // Fallback to admin user if sending to recipient DM is blocked
@@ -154,12 +155,12 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
               title: result.title,
               performer: result.artist,
               duration: result.duration,
-              caption: `🎵 <b>${escapeHtml(result.title)}</b> — <i>${escapeHtml(result.artist)}</i>\nvia @${botUsername}`,
-              parse_mode: 'HTML',
+              disable_notification: true,
               ...(result.thumbnailPath ? { thumbnail: getFileForTelegram(result.thumbnailPath) } : {})
             });
             if (adminSent?.audio?.file_id) {
               fileId = adminSent.audio.file_id;
+              stagingMessage = { chatId: config.adminUserId, messageId: adminSent.message_id };
             }
           } catch (adminErr) {
             logger.warn(`Fallback audio upload to admin failed: ${adminErr.message}`);
@@ -177,6 +178,11 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
           media: fileId
         }
       );
+
+      // Clean up temporary staging message so it does not clutter user PM
+      if (stagingMessage) {
+        await ctx.telegram.deleteMessage(stagingMessage.chatId, stagingMessage.messageId).catch(() => {});
+      }
 
       // Cache file_id in SQLite for instant future responses
       const targetUrl = track.spotifyId
@@ -255,13 +261,12 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
     result = await videoService.download(url);
 
     let fileId = null;
+    let stagingMessage = null;
     const recipientId = ctx.from?.id || config.adminUserId;
 
     if (recipientId && result.filePath) {
-      const videoCaption = `📹 <b>${escapeHtml(result.info?.title || 'Video')}</b>\nvia @${botUsername}`;
       const videoOpts = {
-        caption: videoCaption,
-        parse_mode: 'HTML',
+        disable_notification: true,
         ...(result.thumbnailPath ? { thumbnail: getFileForTelegram(result.thumbnailPath) } : {}),
         ...(result.info?.width ? { width: result.info.width } : {}),
         ...(result.info?.height ? { height: result.info.height } : {}),
@@ -272,6 +277,7 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
         const sent = await ctx.telegram.sendVideo(recipientId, getFileForTelegram(result.filePath), videoOpts);
         if (sent?.video?.file_id) {
           fileId = sent.video.file_id;
+          stagingMessage = { chatId: recipientId, messageId: sent.message_id };
         }
       } catch (dmErr) {
         if (config.adminUserId && recipientId !== config.adminUserId) {
@@ -279,6 +285,7 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
             const adminSent = await ctx.telegram.sendVideo(config.adminUserId, getFileForTelegram(result.filePath), videoOpts);
             if (adminSent?.video?.file_id) {
               fileId = adminSent.video.file_id;
+              stagingMessage = { chatId: config.adminUserId, messageId: adminSent.message_id };
             }
           } catch (adminErr) {
             logger.warn(`Fallback video upload to admin failed: ${adminErr.message}`);
@@ -320,6 +327,11 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
           }
         }
       );
+
+      // Clean up temporary staging message so it does not clutter user PM
+      if (stagingMessage) {
+        await ctx.telegram.deleteMessage(stagingMessage.chatId, stagingMessage.messageId).catch(() => {});
+      }
 
       cacheService.set(url, {
         fileId: fileId,

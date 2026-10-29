@@ -22,6 +22,7 @@ const { handleSearchCommand, handleSearchCallback } = require('./handlers/search
 const { handleTts } = require('./handlers/tts.handler');
 const { handleTagCommand } = require('./handlers/tag.handler');
 const { handleCutCommand } = require('./handlers/cut.handler');
+const { handleInlineQuery, handleChosenInlineResult, handleInlineDownloadCallback } = require('./handlers/inline.handler');
 const settingsService = require('./services/settings.service');
 const memeService = require('./services/meme.service');
 const demotivatorService = require('./services/demotivator.service');
@@ -113,6 +114,11 @@ bot.action(['spot_download', 'spot_cancel'], handleSpotifyCallback);
 // Song search selection and cancellation callbacks
 bot.action(/^s_dl_/, handleSearchCallback);
 bot.action(/^s_cancel_/, handleSearchCallback);
+
+// Inline mode query and callback handlers
+bot.on('inline_query', handleInlineQuery);
+bot.on('chosen_inline_result', handleChosenInlineResult);
+bot.action(/^inline_dl:(.+)$/, handleInlineDownloadCallback);
 
 bot.on(message('text'), handleDownload);
 bot.on('channel_post', (ctx, next) => {

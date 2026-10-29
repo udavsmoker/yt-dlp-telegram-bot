@@ -226,20 +226,22 @@ class CacheService {
   }
 
   set(rawUrl, data) {
-    if (!this.enabled || !this.db || !data?.fileId) return false;
+    const fileId = data?.fileId || data?.file_id;
+    if (!this.enabled || !this.db || !fileId) return false;
     try {
       const normalized = this.normalizeUrl(rawUrl);
       const hash = this.hashUrl(normalized);
       const now = Date.now();
-      const ttl = (data.fileType === 'audio') ? this.audioTtlMs : this.ttlMs;
+      const fileType = data.fileType || data.file_type || 'video';
+      const ttl = (fileType === 'audio') ? this.audioTtlMs : this.ttlMs;
 
       this.stmtSet.run({
         url_hash: hash,
         normalized_url: normalized,
         original_url: rawUrl,
-        file_type: data.fileType || 'video',
-        file_id: data.fileId,
-        file_size: data.fileSize || null,
+        file_type: fileType,
+        file_id: fileId,
+        file_size: data.fileSize || data.file_size || null,
         platform: data.platform || null,
         title: data.title || null,
         author: data.author || null,
@@ -247,7 +249,7 @@ class CacheService {
         quality: data.quality || null,
         width: data.width || null,
         height: data.height || null,
-        caption_info: data.captionInfo ? JSON.stringify(data.captionInfo) : null,
+        caption_info: data.captionInfo || data.caption_info ? JSON.stringify(data.captionInfo || data.caption_info) : null,
         created_at: now,
         expires_at: now + ttl
       });

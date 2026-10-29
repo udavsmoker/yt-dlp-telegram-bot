@@ -9,20 +9,31 @@ async function handleStart(ctx) {
   const parts = rawText.trim().split(/\s+/);
   const payload = parts.length > 1 ? parts[1].trim() : null;
 
-  // Handle inline mode deep-links (e.g. t.me/bot?start=dl_<base64> or t.me/bot?start=song_<id>)
+  // Handle inline mode deep-links (<= 64 chars)
   if (payload) {
     const { handleDownload } = require('./download');
+
+    if (payload.startsWith('s_')) {
+      const inlineService = require('../services/inline.service');
+      const targetUrl = inlineService.getShortLink(payload);
+      if (targetUrl) {
+        ctx.message.text = targetUrl;
+        return handleDownload(ctx, () => {});
+      }
+    }
+
     if (payload.startsWith('song_')) {
       const youtubeId = payload.replace('song_', '');
       ctx.message.text = `https://www.youtube.com/watch?v=${youtubeId}`;
-      return handleDownload(ctx);
+      return handleDownload(ctx, () => {});
     }
+
     if (payload.startsWith('dl_') || payload.startsWith('mp3_')) {
       try {
         const cleanPayload = payload.replace(/^(?:dl|mp3)_/, '');
         const decodedUrl = Buffer.from(cleanPayload, 'base64url').toString('utf8');
         ctx.message.text = decodedUrl;
-        return handleDownload(ctx);
+        return handleDownload(ctx, () => {});
       } catch (err) {
         logger.warn(`Failed to decode start deep-link payload "${payload}": ${err.message}`);
       }

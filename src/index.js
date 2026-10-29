@@ -118,7 +118,7 @@ bot.action(/^s_cancel_/, handleSearchCallback);
 // Inline mode query and callback handlers
 bot.on('inline_query', handleInlineQuery);
 bot.on('chosen_inline_result', handleChosenInlineResult);
-bot.action(/^inline_dl:(.+)$/, handleInlineDownloadCallback);
+bot.action(/^inline_(?:dl|wait):/, handleInlineDownloadCallback);
 
 bot.on(message('text'), handleDownload);
 bot.on('channel_post', (ctx, next) => {

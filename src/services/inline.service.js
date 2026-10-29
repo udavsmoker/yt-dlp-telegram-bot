@@ -3,7 +3,7 @@ const cacheService = require('./cache.service');
 const spotifyAudioService = require('./spotify-audio.service');
 const spotifyService = require('./spotify.service');
 const logger = require('../utils/logger');
-const { escapeHtml, formatDuration, isTikTokUrl, isYouTubeUrl, isInstagramUrl } = require('../utils/helpers');
+const { escapeHtml, formatDuration, isTikTokUrl, isYouTubeUrl } = require('../utils/helpers');
 
 class InlineService {
   constructor() {
@@ -11,6 +11,68 @@ class InlineService {
     this.queryCache = new Map();
     this.cacheTtlMs = 60 * 1000;
     this.maxCacheSize = 200;
+
+    // Track metadata store for chosen inline results (TTL: 10 minutes)
+    this.pendingTracks = new Map();
+
+    // Shortlink store for deep-links to prevent exceeding Telegram's 64-char start parameter limit
+    this.shortLinks = new Map();
+  }
+
+  /**
+   * Create a short identifier (<= 12 chars) for deep-linking in /start.
+   * @param {string} url
+   * @returns {string}
+   */
+  createShortLink(url) {
+    const token = 's_' + Math.random().toString(36).substring(2, 10);
+    this.shortLinks.set(token, {
+      url,
+      expiresAt: Date.now() + 24 * 3600 * 1000
+    });
+    return token;
+  }
+
+  /**
+   * Retrieve original URL from a short token.
+   * @param {string} token
+   * @returns {string|null}
+   */
+  getShortLink(token) {
+    const entry = this.shortLinks.get(token);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.shortLinks.delete(token);
+      return null;
+    }
+    return entry.url;
+  }
+
+  /**
+   * Store pending track metadata for background synthesis when chosen by user.
+   * @param {string} key
+   * @param {object} track
+   */
+  setPendingTrack(key, track) {
+    this.pendingTracks.set(key, {
+      ...track,
+      expiresAt: Date.now() + 10 * 60 * 1000
+    });
+  }
+
+  /**
+   * Retrieve pending track metadata.
+   * @param {string} key
+   * @returns {object|null}
+   */
+  getPendingTrack(key) {
+    const entry = this.pendingTracks.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.pendingTracks.delete(key);
+      return null;
+    }
+    return entry;
   }
 
   /**
@@ -62,7 +124,7 @@ class InlineService {
             '🎬 <b>Video Downloader</b>\n\n' +
             'Type <code>@' + botUsername + ' &lt;video link&gt;</code> in any chat to share media instantly.\n\n' +
             '<b>Supported Platforms:</b>\n' +
-            '• TikTok (no watermark)\n' +
+            '• TikTok (1080p Full HD & Photo Slideshows)\n' +
             '• Instagram Reels & Posts\n' +
             '• YouTube & Shorts\n' +
             '• Twitter / X, Bluesky, Reddit'
@@ -74,16 +136,16 @@ class InlineService {
         type: 'article',
         id: 'guide_music',
         title: '🎵 Search & Send Music',
-        description: 'Type any track name or artist to find 320 kbps MP3',
+        description: 'Type any track name or artist to download 320 kbps MP3',
         thumb_url: 'https://cdn-icons-png.flaticon.com/128/3844/3844724.png',
         input_message_content: {
           message_text: (
-            '🎵 <b>Music Search</b>\n\n' +
-            'Type <code>@' + botUsername + ' &lt;song title or artist&gt;</code> to find and send music.\n\n' +
+            '🎵 <b>Music Downloader & Search</b>\n\n' +
+            'Type <code>@' + botUsername + ' &lt;song title or artist&gt;</code> to find and download music directly.\n\n' +
             '<b>Examples:</b>\n' +
             '• <code>@' + botUsername + ' Linkin Park Numb</code>\n' +
             '• <code>@' + botUsername + ' Bohemian Rhapsody</code>\n' +
-            '• <code>@' + botUsername + ' Miyagi Minor</code>'
+            '• <code>@' + botUsername + ' https://open.spotify.com/track/...</code>'
           ),
           parse_mode: 'HTML'
         }
@@ -139,35 +201,118 @@ class InlineService {
       }
     }
 
-    const b64 = Buffer.from(url).toString('base64url');
-
-    // 2. TikTok resolution (fetch direct CDN playUrl without watermark)
+    // 2. TikTok resolution (prioritize 1080p Full HD stream and handle photo slideshows)
     if (isTikTokUrl(url)) {
       try {
-        const res = await axios.post('https://www.tikwm.com/api/', { url, hd: 1 }, { timeout: 3500 });
+        const res = await axios.post('https://www.tikwm.com/api/', { url, hd: 1 }, { timeout: 4000 });
         const data = res.data?.data;
-        if (data && data.play) {
-          const title = (data.title || 'TikTok Video').substring(0, 100);
-          const author = data.author?.nickname || 'TikTok';
-          results.push({
-            type: 'video',
-            id: `tt_${b64.substring(0, 30)}`,
-            video_url: data.play,
-            mime_type: 'video/mp4',
-            thumbnail_url: data.cover || 'https://cdn-icons-png.flaticon.com/128/3046/3046121.png',
-            title: title,
-            description: `@${author} • TikTok (No Watermark)`,
-            caption: `📹 <b>${escapeHtml(title)}</b>\n👤 <i>@${escapeHtml(author)}</i>\nvia @${botUsername}`,
-            parse_mode: 'HTML'
-          });
-          return results;
+        if (data) {
+          const title = (data.title || 'TikTok Media').substring(0, 100);
+          const author = data.author?.nickname || data.author?.unique_id || 'TikTok';
+
+          // A. Photo Slideshow post: return photos and original audio
+          if (data.images && Array.isArray(data.images) && data.images.length > 0) {
+            const shortId = this.createShortLink(url);
+            for (let i = 0; i < Math.min(data.images.length, 10); i++) {
+              results.push({
+                type: 'photo',
+                id: `tt_img_${i}_${shortId}`,
+                photo_url: data.images[i],
+                thumbnail_url: data.images[i],
+                title: `Photo ${i + 1}/${data.images.length}`,
+                caption: `📸 <b>${escapeHtml(title)}</b> (${i + 1}/${data.images.length})\n👤 <i>@${escapeHtml(author)}</i>\nvia @${botUsername}`,
+                parse_mode: 'HTML'
+              });
+            }
+
+            // Also attach background audio if available
+            const musicUrl = data.music_info?.play || data.music || data.play;
+            if (musicUrl) {
+              results.push({
+                type: 'audio',
+                id: `tt_aud_${shortId}`,
+                audio_url: musicUrl,
+                title: data.music_info?.title || `${title} (Sound)`,
+                performer: data.music_info?.author || author,
+                caption: `🎵 <b>${escapeHtml(data.music_info?.title || title)}</b>\n👤 <i>@${escapeHtml(author)}</i>\nvia @${botUsername}`,
+                parse_mode: 'HTML'
+              });
+            }
+            return results;
+          }
+
+          // B. Video post: use hdplay (1080p) over play (576p)
+          const videoUrl = data.hdplay || data.play;
+          if (videoUrl) {
+            const shortId = this.createShortLink(url);
+            results.push({
+              type: 'video',
+              id: `tt_vid_${shortId}`,
+              video_url: videoUrl,
+              mime_type: 'video/mp4',
+              thumbnail_url: data.cover || 'https://cdn-icons-png.flaticon.com/128/3046/3046121.png',
+              title: title,
+              description: `@${author} • TikTok HD (1080p)`,
+              caption: `📹 <b>${escapeHtml(title)}</b>\n👤 <i>@${escapeHtml(author)}</i>\nvia @${botUsername}`,
+              parse_mode: 'HTML'
+            });
+            return results;
+          }
         }
       } catch (err) {
         logger.warn(`Inline TikTok resolution failed: ${err.message}`);
       }
     }
 
-    // 3. YouTube resolution (fetch metadata via oEmbed)
+    // 3. Spotify resolution (tracks)
+    if (spotifyService.isSpotifyUrl(url)) {
+      const parsed = spotifyService.parseUrl(url);
+      if (parsed && parsed.type === 'track') {
+        try {
+          const track = await spotifyService.getTrack(parsed.id);
+          if (track) {
+            const trackPayload = {
+              id: `spot_${parsed.id}`,
+              spotifyId: parsed.id,
+              title: track.title,
+              artist: track.artist,
+              album: track.album || track.title,
+              coverUrl: track.coverUrl,
+              durationMs: track.durationMs || 0
+            };
+            this.setPendingTrack(`spot_${parsed.id}`, trackPayload);
+
+            results.push({
+              type: 'article',
+              id: `spot_${parsed.id}`,
+              title: track.title,
+              description: `${track.artist} • 320 kbps MP3`,
+              thumb_url: track.coverUrl || 'https://cdn-icons-png.flaticon.com/128/2111/2111624.png',
+              input_message_content: {
+                message_text: (
+                  `⏳ <b>Downloading:</b> 🎵 <b>${escapeHtml(track.title)}</b> — <i>${escapeHtml(track.artist)}</i>\n` +
+                  `💿 Album: <i>${escapeHtml(track.album || 'Single')}</i>\n` +
+                  `<i>Converting to 320 kbps MP3 with album art...</i>`
+                ),
+                parse_mode: 'HTML'
+              },
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    { text: '⏳ Downloading 320 kbps MP3...', callback_data: `inline_wait:spot_${parsed.id}` }
+                  ]
+                ]
+              }
+            });
+            return results;
+          }
+        } catch (err) {
+          logger.warn(`Inline Spotify track resolution failed: ${err.message}`);
+        }
+      }
+    }
+
+    // 4. YouTube resolution (fetch metadata via oEmbed)
     if (isYouTubeUrl(url)) {
       try {
         const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
@@ -175,10 +320,11 @@ class InlineService {
         const title = res.data?.title || 'YouTube Video';
         const author = res.data?.author_name || 'YouTube';
         const thumb = res.data?.thumbnail_url || 'https://cdn-icons-png.flaticon.com/128/1384/1384060.png';
+        const shortToken = this.createShortLink(url);
 
         results.push({
           type: 'article',
-          id: `yt_${b64.substring(0, 30)}`,
+          id: `yt_${shortToken}`,
           title: title,
           description: `${author} • Tap to download`,
           thumb_url: thumb,
@@ -193,8 +339,8 @@ class InlineService {
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '📹 Download Video', url: `https://t.me/${botUsername}?start=dl_${b64}` },
-                { text: '🎵 Download MP3', url: `https://t.me/${botUsername}?start=mp3_${b64}` }
+                { text: '📹 Download Video', url: `https://t.me/${botUsername}?start=${shortToken}` },
+                { text: '🎵 Download MP3', url: `https://t.me/${botUsername}?start=${shortToken}` }
               ]
             ]
           }
@@ -205,45 +351,11 @@ class InlineService {
       }
     }
 
-    // 4. Spotify track resolution
-    if (url.includes('spotify.com/track/')) {
-      try {
-        const track = await spotifyService.getTrackMetadata(url);
-        if (track) {
-          results.push({
-            type: 'article',
-            id: `spot_${b64.substring(0, 30)}`,
-            title: track.title,
-            description: `${track.artist} • Spotify Track`,
-            thumb_url: track.coverUrl || 'https://cdn-icons-png.flaticon.com/128/2111/2111624.png',
-            input_message_content: {
-              message_text: (
-                `🎵 <b>${escapeHtml(track.title)}</b>\n` +
-                `👤 <i>${escapeHtml(track.artist)}</i>\n` +
-                `💿 Album: <i>${escapeHtml(track.album || 'Single')}</i>\n\n` +
-                `<i>Click below to download 320 kbps MP3:</i>`
-              ),
-              parse_mode: 'HTML'
-            },
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: '🎵 Download MP3 (320 kbps)', url: `https://t.me/${botUsername}?start=dl_${b64}` }
-                ]
-              ]
-            }
-          });
-          return results;
-        }
-      } catch (err) {
-        logger.warn(`Inline Spotify track resolution failed: ${err.message}`);
-      }
-    }
-
     // 5. Generic fallback article for other platforms
+    const shortToken = this.createShortLink(url);
     results.push({
       type: 'article',
-      id: `gen_${b64.substring(0, 30)}`,
+      id: `gen_${shortToken}`,
       title: '📥 Download Media',
       description: url,
       thumb_url: 'https://cdn-icons-png.flaticon.com/128/1179/1179069.png',
@@ -258,8 +370,7 @@ class InlineService {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: '🚀 Download Media', url: `https://t.me/${botUsername}?start=dl_${b64}` },
-            { text: '🎵 Extract Audio', url: `https://t.me/${botUsername}?start=mp3_${b64}` }
+            { text: '🚀 Download Media', url: `https://t.me/${botUsername}?start=${shortToken}` }
           ]
         ]
       }
@@ -270,6 +381,7 @@ class InlineService {
 
   /**
    * Search music tracks via Innertube and format as inline results.
+   * Auto-triggers background synthesis into chat when tapped.
    * @param {string} query
    * @param {string} botUsername
    * @returns {Promise<Array<object>>}
@@ -294,28 +406,28 @@ class InlineService {
           parse_mode: 'HTML'
         });
       } else {
-        // Candidate article with instant download button and deep link
+        // Candidate article that triggers automatic download on tap via chosen_inline_result
         const durationSec = Math.round(track.durationMs / 1000);
+        this.setPendingTrack(`song_${track.youtubeId}`, track);
+
         results.push({
           type: 'article',
-          id: `song_art_${track.youtubeId}`,
+          id: `song_${track.youtubeId}`,
           title: track.title,
-          description: `${track.artist} • ${formatDuration(durationSec)}`,
+          description: `${track.artist} • ${formatDuration(durationSec)} • 320 kbps MP3`,
           thumb_url: `https://i.ytimg.com/vi/${track.youtubeId}/hqdefault.jpg`,
           input_message_content: {
             message_text: (
-              `🎵 <b>${escapeHtml(track.title)}</b>\n` +
-              `👤 <i>${escapeHtml(track.artist)}</i>\n` +
-              `⏱ Duration: <code>${formatDuration(durationSec)}</code>\n\n` +
-              `<i>Click below to download:</i>`
+              `⏳ <b>Downloading:</b> 🎵 <b>${escapeHtml(track.title)}</b> — <i>${escapeHtml(track.artist)}</i>\n` +
+              `⏱ Duration: <code>${formatDuration(durationSec)}</code>\n` +
+              `<i>Converting to 320 kbps MP3 with album art...</i>`
             ),
             parse_mode: 'HTML'
           },
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '⬇️ Download in Chat', callback_data: `inline_dl:${track.youtubeId}` },
-                { text: '🎧 Open in Bot', url: `https://t.me/${botUsername}?start=song_${track.youtubeId}` }
+                { text: '⏳ Downloading 320 kbps MP3...', callback_data: `inline_wait:${track.youtubeId}` }
               ]
             ]
           }

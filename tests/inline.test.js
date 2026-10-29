@@ -62,26 +62,66 @@ describe('Inline Mode Service & Handlers', () => {
       assert.equal(results[0].performer, 'Linkin Park');
     });
 
-    it('should provide download article with deep links for uncached generic URL', async () => {
+    it('should provide download article with short deep links for uncached generic URL', async () => {
       const genericUrl = 'https://vimeo.com/987654321';
       const results = await inlineService.handleQuery(genericUrl, 'test_bot');
       assert.ok(results.length >= 1);
       assert.equal(results[0].type, 'article');
       assert.ok(results[0].title.includes('Download Media'));
       const buttons = results[0].reply_markup.inline_keyboard[0];
-      assert.ok(buttons[0].url.includes('start=dl_'));
-      assert.ok(buttons[1].url.includes('start=mp3_'));
+      assert.ok(buttons[0].url.includes('start=s_'));
+      // Verify token length is well within Telegram 64-char limit
+      const token = buttons[0].url.split('start=')[1];
+      assert.ok(token.length <= 64);
+      assert.equal(inlineService.getShortLink(token), genericUrl);
+    });
+
+    it('should resolve Spotify track URL with 320 kbps MP3 article card', async () => {
+      const spotifyUrl = 'https://open.spotify.com/intl-ru/track/3n3Ppam7vgaVa1iaRUc9Lp';
+      const results = await inlineService.handleQuery(spotifyUrl, 'test_bot');
+      assert.ok(results.length >= 1);
+      assert.equal(results[0].type, 'article');
+      assert.ok(results[0].id.startsWith('spot_'));
+      assert.ok(results[0].title);
+    });
+  });
+
+  describe('Short Link Management', () => {
+    it('should create and retrieve short links for deep linking', () => {
+      const url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ&very_long_tracking_params=12345';
+      const token = inlineService.createShortLink(url);
+      assert.ok(token.startsWith('s_'));
+      assert.ok(token.length < 20);
+      assert.equal(inlineService.getShortLink(token), url);
+      assert.equal(inlineService.getShortLink('non_existent'), null);
+    });
+
+    it('should store and retrieve pending track metadata', () => {
+      const track = {
+        id: 'yt_123',
+        youtubeId: '123',
+        title: 'Song Title',
+        artist: 'Artist Name'
+      };
+      inlineService.setPendingTrack('song_123', track);
+      assert.deepEqual(inlineService.getPendingTrack('song_123'), {
+        ...track,
+        expiresAt: inlineService.getPendingTrack('song_123').expiresAt
+      });
     });
   });
 
   describe('Music Search Query Resolution', () => {
-    it('should search tracks for text query and return candidate articles', async () => {
+    it('should search tracks for text query and return candidate articles with auto-download markup', async () => {
       const query = 'Queen Bohemian Rhapsody';
       const results = await inlineService.handleQuery(query, 'test_bot');
       assert.ok(results.length > 0);
       const first = results[0];
       assert.ok(first.type === 'article' || first.type === 'audio');
       assert.ok(first.title);
+      if (first.type === 'article') {
+        assert.ok(first.reply_markup.inline_keyboard[0][0].text.includes('Downloading'));
+      }
     });
 
     it('should cache repeated queries in-memory', async () => {

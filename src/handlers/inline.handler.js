@@ -35,6 +35,75 @@ async function handleInlineQuery(ctx) {
 const activeInlineDownloads = new Set();
 
 /**
+ * Resolve ordered candidate chat IDs for uploading staging media files.
+ * Priority:
+ * 1. Dedicated media dump channel/group (MEDIA_DUMP_CHAT_ID)
+ * 2. Bot admin user ID (ADMIN_USER_ID) - guaranteed to have an active chat
+ * 3. Calling user ID (ctx.from.id)
+ * @param {object} ctx
+ * @returns {Array<number|string>}
+ */
+function getStagingChatTargets(ctx) {
+  const targets = [];
+  if (config.mediaDumpChatId) targets.push(config.mediaDumpChatId);
+  if (config.adminUserId && !targets.includes(config.adminUserId)) targets.push(config.adminUserId);
+  if (ctx.from?.id && !targets.includes(ctx.from.id)) targets.push(ctx.from.id);
+  return targets;
+}
+
+/**
+ * Upload audio file to staging target to obtain file_id.
+ * Tries targets in order until one succeeds.
+ * @param {object} ctx
+ * @param {string} audioPath
+ * @param {object} opts
+ * @returns {Promise<{ fileId: string, chatId: number|string, messageId: number }|null>}
+ */
+async function uploadAudioStaging(ctx, audioPath, opts) {
+  const targets = getStagingChatTargets(ctx);
+  for (const chatId of targets) {
+    try {
+      const sent = await ctx.telegram.sendAudio(chatId, getFileForTelegram(audioPath), {
+        ...opts,
+        disable_notification: true
+      });
+      if (sent?.audio?.file_id) {
+        return { fileId: sent.audio.file_id, chatId, messageId: sent.message_id };
+      }
+    } catch (err) {
+      logger.warn(`Staging audio upload failed for chat ${chatId}: ${err.message}`);
+    }
+  }
+  return null;
+}
+
+/**
+ * Upload video file to staging target to obtain file_id.
+ * Tries targets in order until one succeeds.
+ * @param {object} ctx
+ * @param {string} videoPath
+ * @param {object} opts
+ * @returns {Promise<{ fileId: string, chatId: number|string, messageId: number }|null>}
+ */
+async function uploadVideoStaging(ctx, videoPath, opts) {
+  const targets = getStagingChatTargets(ctx);
+  for (const chatId of targets) {
+    try {
+      const sent = await ctx.telegram.sendVideo(chatId, getFileForTelegram(videoPath), {
+        ...opts,
+        disable_notification: true
+      });
+      if (sent?.video?.file_id) {
+        return { fileId: sent.video.file_id, chatId, messageId: sent.message_id };
+      }
+    } catch (err) {
+      logger.warn(`Staging video upload failed for chat ${chatId}: ${err.message}`);
+    }
+  }
+  return null;
+}
+
+/**
  * Background worker to download, tag, and deliver an inline music track directly to chat.
  * Replaces the temporary "Downloading..." article message with full audio player.
  * @param {object} ctx
@@ -129,60 +198,25 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
     result = await spotifyAudioService.downloadAndTagTrack(track);
 
     // Obtain Telegram file_id to edit the inline message
-    let fileId = null;
-    let stagingMessage = null;
-    const recipientId = ctx.from?.id || config.adminUserId;
+    const staging = await uploadAudioStaging(ctx, result.audioPath, {
+      title: result.title,
+      performer: result.artist,
+      duration: result.duration,
+      ...(result.thumbnailPath ? { thumbnail: getFileForTelegram(result.thumbnailPath) } : {})
+    });
 
-    if (recipientId) {
-      try {
-        const sent = await ctx.telegram.sendAudio(recipientId, getFileForTelegram(result.audioPath), {
-          title: result.title,
-          performer: result.artist,
-          duration: result.duration,
-          disable_notification: true,
-          ...(result.thumbnailPath ? { thumbnail: getFileForTelegram(result.thumbnailPath) } : {})
-        });
-
-        if (sent?.audio?.file_id) {
-          fileId = sent.audio.file_id;
-          stagingMessage = { chatId: recipientId, messageId: sent.message_id };
-        }
-      } catch (dmErr) {
-        // Fallback to admin user if sending to recipient DM is blocked
-        if (config.adminUserId && recipientId !== config.adminUserId) {
-          try {
-            const adminSent = await ctx.telegram.sendAudio(config.adminUserId, getFileForTelegram(result.audioPath), {
-              title: result.title,
-              performer: result.artist,
-              duration: result.duration,
-              disable_notification: true,
-              ...(result.thumbnailPath ? { thumbnail: getFileForTelegram(result.thumbnailPath) } : {})
-            });
-            if (adminSent?.audio?.file_id) {
-              fileId = adminSent.audio.file_id;
-              stagingMessage = { chatId: config.adminUserId, messageId: adminSent.message_id };
-            }
-          } catch (adminErr) {
-            logger.warn(`Fallback audio upload to admin failed: ${adminErr.message}`);
-          }
-        }
-      }
-    }
-
-    if (fileId) {
+    if (staging?.fileId) {
       // Replace the inline placeholder message with native Telegram audio player (clean, no duplicate caption)
       await ctx.telegram.editMessageMedia(
         undefined, undefined, inlineMessageId,
         {
           type: 'audio',
-          media: fileId
+          media: staging.fileId
         }
       );
 
-      // Clean up temporary staging message so it does not clutter user PM
-      if (stagingMessage) {
-        await ctx.telegram.deleteMessage(stagingMessage.chatId, stagingMessage.messageId).catch(() => {});
-      }
+      // Clean up temporary staging message so it does not clutter user PM or temp chat
+      await ctx.telegram.deleteMessage(staging.chatId, staging.messageId).catch(() => {});
 
       // Cache file_id in SQLite for instant future responses
       const targetUrl = track.spotifyId
@@ -190,7 +224,7 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
         : `https://www.youtube.com/watch?v=${track.youtubeId || track.id}`;
 
       cacheService.set(targetUrl, {
-        fileId: fileId,
+        fileId: staging.fileId,
         fileType: 'audio',
         title: result.title,
         author: result.artist,
@@ -260,41 +294,14 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
 
     result = await videoService.download(url);
 
-    let fileId = null;
-    let stagingMessage = null;
-    const recipientId = ctx.from?.id || config.adminUserId;
+    const staging = await uploadVideoStaging(ctx, result.filePath, {
+      ...(result.thumbnailPath ? { thumbnail: getFileForTelegram(result.thumbnailPath) } : {}),
+      ...(result.info?.width ? { width: result.info.width } : {}),
+      ...(result.info?.height ? { height: result.info.height } : {}),
+      ...(result.info?.duration ? { duration: result.info.duration } : {})
+    });
 
-    if (recipientId && result.filePath) {
-      const videoOpts = {
-        disable_notification: true,
-        ...(result.thumbnailPath ? { thumbnail: getFileForTelegram(result.thumbnailPath) } : {}),
-        ...(result.info?.width ? { width: result.info.width } : {}),
-        ...(result.info?.height ? { height: result.info.height } : {}),
-        ...(result.info?.duration ? { duration: result.info.duration } : {})
-      };
-
-      try {
-        const sent = await ctx.telegram.sendVideo(recipientId, getFileForTelegram(result.filePath), videoOpts);
-        if (sent?.video?.file_id) {
-          fileId = sent.video.file_id;
-          stagingMessage = { chatId: recipientId, messageId: sent.message_id };
-        }
-      } catch (dmErr) {
-        if (config.adminUserId && recipientId !== config.adminUserId) {
-          try {
-            const adminSent = await ctx.telegram.sendVideo(config.adminUserId, getFileForTelegram(result.filePath), videoOpts);
-            if (adminSent?.video?.file_id) {
-              fileId = adminSent.video.file_id;
-              stagingMessage = { chatId: config.adminUserId, messageId: adminSent.message_id };
-            }
-          } catch (adminErr) {
-            logger.warn(`Fallback video upload to admin failed: ${adminErr.message}`);
-          }
-        }
-      }
-    }
-
-    if (fileId && inlineMessageId) {
+    if (staging?.fileId && inlineMessageId) {
       const rawAuthor = result.info?.uploader || result.info?.channel || result.info?.creator || result.info?.author || '';
       const cleanAuthor = rawAuthor.replace(/^@/, '').trim();
       const caption = cleanAuthor ? `👤 <b>@${escapeHtml(cleanAuthor)}</b>` : undefined;
@@ -318,7 +325,7 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
         undefined, undefined, inlineMessageId,
         {
           type: 'video',
-          media: fileId,
+          media: staging.fileId,
           ...(caption ? { caption, parse_mode: 'HTML' } : {})
         },
         {
@@ -328,13 +335,11 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
         }
       );
 
-      // Clean up temporary staging message so it does not clutter user PM
-      if (stagingMessage) {
-        await ctx.telegram.deleteMessage(stagingMessage.chatId, stagingMessage.messageId).catch(() => {});
-      }
+      // Clean up temporary staging message so it does not clutter user PM or temp chat
+      await ctx.telegram.deleteMessage(staging.chatId, staging.messageId).catch(() => {});
 
       cacheService.set(url, {
-        fileId: fileId,
+        fileId: staging.fileId,
         fileType: 'video',
         title: result.info?.title,
         author: result.info?.uploader,

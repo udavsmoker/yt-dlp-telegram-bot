@@ -479,33 +479,51 @@ class InlineService {
    */
   async resolveMusicSearch(query, botUsername) {
     const results = [];
-    const tracks = await spotifyAudioService.searchYouTubeTracks(query, 8);
+    // Prioritize pristine Spotify metadata & official album covers, with auto-fallback to YouTube
+    const tracks = await spotifyService.searchTracks(query, 8);
 
     for (const track of tracks) {
-      const ytUrl = `https://www.youtube.com/watch?v=${track.youtubeId}`;
-      const cached = cacheService.get(cacheService.normalizeUrl(ytUrl));
+      const isYtFallback = !!track.youtubeId;
+      const targetUrl = isYtFallback
+        ? `https://www.youtube.com/watch?v=${track.youtubeId}`
+        : `https://open.spotify.com/track/${track.id}`;
+
+      const cached = cacheService.get(cacheService.normalizeUrl(targetUrl));
 
       if (cached && cached.file_id && cached.file_type === 'audio') {
         // Instant audio result from 30-day SQLite cache (clean, no duplicate caption)
         results.push({
           type: 'audio',
-          id: `aud_cache_${track.youtubeId}`,
+          id: `aud_cache_${track.id}`,
           audio_file_id: cached.file_id,
           title: track.title,
           performer: track.artist
         });
       } else {
         // Candidate article that triggers automatic download on tap via chosen_inline_result
-        const durationSec = Math.round(track.durationMs / 1000);
-        track.coverUrl = `https://i.ytimg.com/vi/${track.youtubeId}/hqdefault.jpg`;
-        this.setPendingTrack(`song_${track.youtubeId}`, track);
+        const durationSec = Math.round((track.durationMs || 0) / 1000);
+        const resultKey = isYtFallback ? `song_${track.youtubeId}` : `spot_${track.id}`;
+
+        const trackPayload = {
+          id: resultKey,
+          spotifyId: isYtFallback ? null : track.id,
+          youtubeId: isYtFallback ? track.youtubeId : null,
+          title: track.title,
+          artist: track.artist,
+          album: track.album || track.title,
+          coverUrl: track.coverUrl || (isYtFallback ? `https://i.ytimg.com/vi/${track.youtubeId}/hqdefault.jpg` : null),
+          durationMs: track.durationMs || 0
+        };
+        this.setPendingTrack(resultKey, trackPayload);
+
+        const thumb = track.coverUrl || (isYtFallback ? `https://i.ytimg.com/vi/${track.youtubeId}/hqdefault.jpg` : 'https://cdn-icons-png.flaticon.com/128/2111/2111624.png');
 
         results.push({
           type: 'article',
-          id: `song_${track.youtubeId}`,
+          id: resultKey,
           title: track.title,
           description: `${track.artist} • ${formatDuration(durationSec)} • 320 kbps MP3`,
-          thumb_url: `https://i.ytimg.com/vi/${track.youtubeId}/hqdefault.jpg`,
+          thumb_url: thumb,
           input_message_content: {
             message_text: `⏳ <b>Downloading:</b> ${escapeHtml(track.artist)} — ${escapeHtml(track.title)}...`,
             parse_mode: 'HTML'
@@ -513,7 +531,7 @@ class InlineService {
           reply_markup: {
             inline_keyboard: [
               [
-                { text: '⬇️ Скачать (320 kbps MP3)', callback_data: `inline_dl:song_${track.youtubeId}` }
+                { text: '⬇️ Скачать (320 kbps MP3)', callback_data: `inline_dl:${resultKey}` }
               ]
             ]
           }

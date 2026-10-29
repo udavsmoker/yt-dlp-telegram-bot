@@ -16,6 +16,7 @@ module.exports = {
     cookiesFile: process.env.YTDLP_COOKIES_FILE || (require('fs').existsSync(require('path').join(__dirname, '../../cookies.txt')) ? require('path').join(__dirname, '../../cookies.txt') : null)
   },
   adminUserId: parseInt(process.env.ADMIN_USER_ID || '0', 10),
+  mediaDumpChatId: process.env.MEDIA_DUMP_CHAT_ID ? (isNaN(process.env.MEDIA_DUMP_CHAT_ID) ? process.env.MEDIA_DUMP_CHAT_ID : parseInt(process.env.MEDIA_DUMP_CHAT_ID, 10)) : null,
   cache: {
     enabled: process.env.ENABLE_VIDEO_CACHE !== 'false',
     ttlHours: parseInt(process.env.CACHE_TTL_HOURS || '48', 10),

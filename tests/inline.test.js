@@ -152,7 +152,7 @@ describe('Inline Mode Service & Handlers', () => {
       assert.ok(first.type === 'article' || first.type === 'audio');
       assert.ok(first.title);
       if (first.type === 'article') {
-        assert.ok(first.reply_markup.inline_keyboard[0][0].callback_data.startsWith('inline_dl:song_'));
+        assert.ok(/^inline_dl:(?:spot|song)_/.test(first.reply_markup.inline_keyboard[0][0].callback_data));
       }
     });
 

@@ -3,11 +3,11 @@ const undoService = require('../services/undo.service');
 const logger = require('../utils/logger');
 const { cleanupFile, getFileForTelegram, getUserInfo } = require('../utils/helpers');
 
-const KNOWN_VOICES = ['demon', 'bass', 'chipmunk', 'anime', 'robot', 'radio', 'slow', 'fast', 'normal', 'default', 'random'];
+const KNOWN_VOICES = ['normal', 'demon', 'slow', 'fast', 'random'];
 const LANG_REGEX = /^[a-z]{2}(?:-[a-z]{2})?$/i;
 
 /**
- * Parse TTS flags (-demon, -chipmunk, -robot, -radio, -slow, -fast, -random, -en, -ja, etc.) and text.
+ * Parse TTS flags (-normal, -demon, -slow, -fast, -random, -en, -ja, etc.) and text.
  * @param {string} raw
  * @returns {{ text: string, voice: string|null, lang: string|null }}
  */
@@ -68,13 +68,11 @@ async function handleTts(ctx) {
       'Использование:\n' +
       '• <code>/tts Привет, как дела?</code>\n' +
       '• Или ответьте <code>/tts</code> на любое текстовое сообщение.\n\n' +
-      '<b>Флаги голоса (для теста):</b>\n' +
-      '• <code>-demon</code> — бас / демон 👹\n' +
-      '• <code>-chipmunk</code> — бурундук / аниме 🐿\n' +
-      '• <code>-robot</code> — металлический киборг 🤖\n' +
-      '• <code>-radio</code> — эффект рации / мегафона 📻\n' +
-      '• <code>-slow</code> — замедленный 🐌\n' +
-      '• <code>-fast</code> — ускоренный ⚡\n' +
+      '<b>Флаги голоса:</b>\n' +
+      '• <code>-normal</code> — обычный нейроголос 🗣\n' +
+      '• <code>-demon</code> — мужской голос 👹\n' +
+      '• <code>-slow</code> — замедленная нативная речь 🐌\n' +
+      '• <code>-fast</code> — ускоренная нативная речь ⚡\n' +
       '• <code>-random</code> — случайный голос 🎲\n' +
       '• <code>-en</code>, <code>-ja</code>, <code>-de</code> — сменить язык 🌍\n\n' +
       '<i>Пример: <code>/tts -demon Восстание машин началось</code></i>',

@@ -1,35 +1,47 @@
-const axios = require('axios');
 const path = require('path');
 const fs = require('fs').promises;
 const { promisify } = require('util');
 const execFile = promisify(require('child_process').execFile);
+const { EdgeTTS } = require('@andresaya/edge-tts');
 const config = require('../config');
 const logger = require('../utils/logger');
 const { generateFilename, ensureDir } = require('../utils/helpers');
 
 const VOICE_PRESETS = {
-  normal: null,
-  default: null,
-  demon: 'rubberband=pitch=0.72',
-  bass: 'rubberband=pitch=0.72',
-  chipmunk: 'rubberband=pitch=1.45',
-  anime: 'rubberband=pitch=1.45',
-  robot: 'rubberband=pitch=0.9,flanger=delay=1.5:depth=2:regen=60:speed=0.5,aecho=0.8:0.88:30:0.4',
-  radio: 'highpass=f=1000,lowpass=f=3000,volume=1.5',
-  slow: 'atempo=0.82',
-  fast: 'atempo=1.35'
+  normal: { female: true },
+  demon: {},
+  slow: { female: true, rate: '-18%' },
+  fast: { female: true, rate: '+30%' }
+};
+
+const NATIVE_VOICES = {
+  ru: { female: 'ru-RU-SvetlanaNeural', male: 'ru-RU-DmitryNeural' },
+  en: { female: 'en-US-JennyNeural', male: 'en-US-GuyNeural' },
+  de: { female: 'de-DE-KatjaNeural', male: 'de-DE-ConradNeural' },
+  ja: { female: 'ja-JP-NanamiNeural', male: 'ja-JP-KeitaNeural' },
+  es: { female: 'es-ES-ElviraNeural', male: 'es-ES-AlvaroNeural' },
+  fr: { female: 'fr-FR-DeniseNeural', male: 'fr-FR-HenriNeural' },
+  uk: { female: 'uk-UA-PolinaNeural', male: 'uk-UA-OstapNeural' }
 };
 
 class TtsService {
   /**
-   * Get audio filter for a given voice name/preset.
+   * Resolve a preset to a native neural voice for the requested language.
    * @param {string} voice
-   * @returns {string|null}
+   * @param {string} lang
+   * @returns {{ name: string, rate?: string }|null}
    */
-  getFilterForVoice(voice) {
+  getVoiceForLanguage(voice, lang = 'ru') {
     if (!voice) return null;
     const key = String(voice).toLowerCase().replace(/^[-/]+/, '').trim();
-    return VOICE_PRESETS[key] || null;
+    const preset = VOICE_PRESETS[key];
+    if (!preset) return null;
+    const language = String(lang).toLowerCase().split('-')[0];
+    const voices = NATIVE_VOICES[language] || NATIVE_VOICES.en;
+    return {
+      name: preset.female ? voices.female : voices.male,
+      ...(preset.rate ? { rate: preset.rate } : {})
+    };
   }
 
   /**
@@ -37,7 +49,7 @@ class TtsService {
    * @returns {string}
    */
   getRandomVoice() {
-    const pool = ['normal', 'demon', 'chipmunk', 'robot', 'radio'];
+    const pool = ['normal', 'demon'];
     return pool[Math.floor(Math.random() * pool.length)];
   }
 
@@ -95,10 +107,10 @@ class TtsService {
     await ensureDir(config.download.tempDir);
     const lang = options.lang || 'ru';
     const voice = options.voice || 'normal';
-    const filter = this.getFilterForVoice(voice);
+    const nativeVoice = this.getVoiceForLanguage(voice, lang) || this.getVoiceForLanguage('normal', lang);
     const signal = options.signal;
 
-    const chunks = this.splitIntoChunks(text, 180);
+    const chunks = this.splitIntoChunks(text, 1000);
     if (chunks.length === 0) {
       throw new Error('No readable text to synthesize');
     }
@@ -108,33 +120,27 @@ class TtsService {
     const outputPath = path.join(config.download.tempDir, outputFilename);
 
     try {
-      // Download audio chunks
+      const tts = new EdgeTTS({ timeout: 30000 });
+
+      // Generate audio remotely; the small server only stores the returned MP3 chunks.
       for (let i = 0; i < chunks.length; i++) {
         if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
         const chunkText = chunks[i];
-        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(chunkText)}&tl=${encodeURIComponent(lang)}&client=tw-ob`;
-
-        const res = await axios.get(url, {
-          responseType: 'arraybuffer',
+        const result = await tts.generate(chunkText, nativeVoice.name, {
+          rate: nativeVoice.rate || '+0%',
+          outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
           signal,
-          timeout: 15000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://translate.google.com/'
-          }
+          timeout: 30000
         });
 
         const chunkPath = path.join(config.download.tempDir, `tts_chunk_${Date.now()}_${i}.mp3`);
-        await fs.writeFile(chunkPath, res.data);
+        await fs.writeFile(chunkPath, result.audio);
         tempFiles.push(chunkPath);
       }
 
       if (tempFiles.length === 1) {
         // Single chunk: convert directly to Telegram OGG Opus
         const ffmpegArgs = ['-y', '-i', tempFiles[0]];
-        if (filter) {
-          ffmpegArgs.push('-af', filter);
-        }
         ffmpegArgs.push('-c:a', 'libopus', '-b:a', '32k', '-vbr', 'on', outputPath);
         await execFile('ffmpeg', ffmpegArgs, { timeout: 30000, signal });
       } else {
@@ -145,9 +151,6 @@ class TtsService {
         await fs.writeFile(listFile, listContent, 'utf8');
 
         const ffmpegArgs = ['-y', '-f', 'concat', '-safe', '0', '-i', listFile];
-        if (filter) {
-          ffmpegArgs.push('-af', filter);
-        }
         ffmpegArgs.push('-c:a', 'libopus', '-b:a', '32k', '-vbr', 'on', outputPath);
         await execFile('ffmpeg', ffmpegArgs, { timeout: 60000, signal });
       }
@@ -178,4 +181,3 @@ class TtsService {
 }
 
 module.exports = new TtsService();
-

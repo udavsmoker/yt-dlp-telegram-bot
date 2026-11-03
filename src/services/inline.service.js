@@ -3,7 +3,7 @@ const cacheService = require('./cache.service');
 const spotifyAudioService = require('./spotify-audio.service');
 const spotifyService = require('./spotify.service');
 const logger = require('../utils/logger');
-const { escapeHtml, formatDuration, isTikTokUrl, isYouTubeUrl, isInstagramUrl, formatCount } = require('../utils/helpers');
+const { escapeHtml, formatDuration, isTikTokUrl, isYouTubeUrl, isInstagramUrl, isTwitterUrl, formatCount } = require('../utils/helpers');
 
 class InlineService {
   constructor() {
@@ -446,7 +446,31 @@ class InlineService {
       return results;
     }
 
-    // 6. Generic fallback article for other platforms
+    // 6. Twitter / X resolution
+    if (isTwitterUrl(url)) {
+      const shortToken = this.createShortLink(url);
+      results.push({
+        type: 'article',
+        id: `tw_${shortToken}`,
+        title: '🐦 Twitter/X Media',
+        description: 'Tap to download directly into this chat',
+        thumb_url: 'https://cdn-icons-png.flaticon.com/128/733/733579.png',
+        input_message_content: {
+          message_text: '⏳ <b>Downloading Twitter/X media...</b>',
+          parse_mode: 'HTML'
+        },
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '⬇️ Download Media', callback_data: `inline_dl:tw_${shortToken}` }
+            ]
+          ]
+        }
+      });
+      return results;
+    }
+
+    // 7. Generic fallback article for other platforms
     const shortToken = this.createShortLink(url);
     results.push({
       type: 'article',

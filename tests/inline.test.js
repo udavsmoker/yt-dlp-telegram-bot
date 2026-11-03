@@ -87,6 +87,17 @@ describe('Inline Mode Service & Handlers', () => {
       assert.equal(inlineService.getShortLink(token), instaUrl);
     });
 
+    it('should resolve Twitter / X URL with auto-download article card', async () => {
+      const twitterUrl = 'https://x.com/user/status/1234567890';
+      const results = await inlineService.handleQuery(twitterUrl, 'test_bot');
+      assert.ok(results.length >= 1);
+      assert.equal(results[0].type, 'article');
+      assert.ok(results[0].id.startsWith('tw_'));
+      assert.ok(results[0].title.includes('Twitter/X'));
+      const token = results[0].id.replace('tw_', '');
+      assert.equal(inlineService.getShortLink(token), twitterUrl);
+    });
+
     it('should resolve Spotify track URL with 320 kbps MP3 article card', async () => {
       const spotifyUrl = 'https://open.spotify.com/intl-ru/track/3n3Ppam7vgaVa1iaRUc9Lp';
       const results = await inlineService.handleQuery(spotifyUrl, 'test_bot');

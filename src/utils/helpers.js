@@ -229,6 +229,17 @@ function isBlueskyPostUrl(url) {
   }
 }
 
+function isTwitterUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    const hostname = urlObj.hostname.toLowerCase().replace('www.', '');
+    return hostname === 'twitter.com' || hostname === 'x.com' ||
+           hostname === 'vxtwitter.com' || hostname === 'fxtwitter.com' || hostname === 'fixupx.com';
+  } catch {
+    return false;
+  }
+}
+
 const { Input } = require('telegraf');
 const config = require('../config');
 
@@ -528,6 +539,7 @@ module.exports = {
   getInstagramImgIndex,
   isBlueskyUrl,
   isBlueskyPostUrl,
+  isTwitterUrl,
   formatFileSize,
   formatDuration,
   renderProgressBar,

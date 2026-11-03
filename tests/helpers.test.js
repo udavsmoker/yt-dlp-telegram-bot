@@ -11,6 +11,7 @@ const {
   getInstagramImgIndex,
   isBlueskyUrl,
   isBlueskyPostUrl,
+  isTwitterUrl,
   renderProgressBar,
   formatFileSize,
   formatDuration,
@@ -89,6 +90,15 @@ describe('Helpers & Utilities', () => {
       assert.equal(isBlueskyUrl('https://bsky.app/profile/user.bsky.social/post/3kabc123'), true);
       assert.equal(isBlueskyPostUrl('https://bsky.app/profile/user.bsky.social/post/3kabc123'), true);
       assert.equal(isBlueskyPostUrl('https://bsky.app/profile/user.bsky.social'), false);
+    });
+
+    it('should detect Twitter / X URLs correctly', () => {
+      assert.equal(isTwitterUrl('https://twitter.com/user/status/12345'), true);
+      assert.equal(isTwitterUrl('https://x.com/user/status/12345'), true);
+      assert.equal(isTwitterUrl('https://fxtwitter.com/user/status/12345'), true);
+      assert.equal(isTwitterUrl('https://vxtwitter.com/user/status/12345'), true);
+      assert.equal(isTwitterUrl('https://fixupx.com/user/status/12345'), true);
+      assert.equal(isTwitterUrl('https://youtube.com/watch?v=123'), false);
     });
   });
 

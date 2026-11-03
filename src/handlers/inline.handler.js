@@ -302,9 +302,17 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
     });
 
     if (staging?.fileId && inlineMessageId) {
-      const rawAuthor = result.info?.uploader || result.info?.channel || result.info?.creator || result.info?.author || '';
-      const cleanAuthor = rawAuthor.replace(/^@/, '').trim();
-      const caption = cleanAuthor ? `👤 <b>@${escapeHtml(cleanAuthor)}</b>` : undefined;
+      const rawAuthor = result.info?.author || result.info?.uploader || result.info?.creator || result.info?.channel || '';
+      let cleanAuthor = rawAuthor.trim();
+      const handleMatch = cleanAuthor.match(/@([a-zA-Z0-9_]+)/);
+      if (handleMatch) {
+        cleanAuthor = handleMatch[1];
+      } else {
+        cleanAuthor = cleanAuthor.replace(/^@/, '').trim();
+      }
+      const caption = cleanAuthor && cleanAuthor !== 'Unknown'
+        ? (cleanAuthor.includes(' ') ? `👤 <b>${escapeHtml(cleanAuthor)}</b>` : `👤 <b>@${escapeHtml(cleanAuthor)}</b>`)
+        : undefined;
 
       // Inline buttons like SavX: like count, comment count, and link to video
       const buttons = [];
@@ -342,7 +350,7 @@ async function processInlineVideoDownload(ctx, resultId, inlineMessageId, botUse
         fileId: staging.fileId,
         fileType: 'video',
         title: result.info?.title,
-        author: result.info?.uploader,
+        author: result.info?.author || result.info?.uploader,
         duration: String(result.info?.duration || 0),
         fileSize: result.fileSize
       });
@@ -434,8 +442,8 @@ async function handleInlineDownloadCallback(ctx) {
     return;
   }
 
-  // Videos (Instagram, YouTube, generic)
-  if (targetId.startsWith('ig_') || targetId.startsWith('yt_') || targetId.startsWith('gen_')) {
+  // Videos (Instagram, YouTube, Twitter, generic)
+  if (targetId.startsWith('ig_') || targetId.startsWith('yt_') || targetId.startsWith('gen_') || targetId.startsWith('tw_')) {
     processInlineVideoDownload(ctx, targetId, inlineMessageId, botUsername).catch(err => {
       logger.error(`Unhandled error in inline video processing via callback: ${err.message}`);
     });

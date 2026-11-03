@@ -1,4 +1,4 @@
-const { getFileForTelegram } = require('../../../utils/helpers');
+const { getFileForTelegram, escapeHtml } = require('../../../utils/helpers');
 const logger = require('../../../utils/logger');
 
 /**
@@ -48,14 +48,27 @@ function truncateTitle(title, maxLen = 200) {
  * @returns {string}
  */
 function buildCaption(sender, url, info = {}) {
+  const isDummyTitle = !info.title ||
+    info.title === 'Video' ||
+    info.title === 'Bluesky Video' ||
+    info.title === 'Bluesky Post' ||
+    info.title === 'Twitter Video' ||
+    info.title === 'Twitter Post' ||
+    /^[a-zA-Z0-9_-]{12,25}$/.test(info.title);
+
+  const titleLine = !isDummyTitle
+    ? `${escapeHtml(truncateTitle(info.title))}\n`
+    : null;
+
+  const authorLine = `👤 ${escapeHtml(info.author || 'Unknown')}`;
+
   const metaLines = [
-    info.title && info.title !== 'Video' && info.title !== 'Bluesky Video' && info.title !== 'Bluesky Post'
-      ? `${truncateTitle(info.title)}\n` : null,
-    `👤 ${info.author || 'Unknown'}`,
+    titleLine,
+    authorLine,
     info.duration && info.duration !== 'Unknown' ? `⏱ ${info.duration}` : null,
     info.fileSize && info.fileSize !== 'Unknown' ? `💾 ${info.fileSize}` : null,
-    `📱 ${info.platform || 'Unknown'}`,
-    info.quality ? `📊 ${info.quality}` : null
+    `📱 ${escapeHtml(info.platform || 'Unknown')}`,
+    info.quality ? `📊 ${escapeHtml(info.quality)}` : null
   ].filter(Boolean).join('\n');
 
   return `${sender.caption} shared: <a href="${url}">Link</a>\n\n<blockquote expandable>${metaLines}</blockquote>`.trim();

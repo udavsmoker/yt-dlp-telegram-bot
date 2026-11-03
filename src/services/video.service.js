@@ -61,6 +61,9 @@ class VideoService {
       let isTikTok = false;
       let usesHLS = false;
       let isProblematicSite = false; // Sites with filename issues
+      let metadataOverride = null;
+      const originalInputUrl = url;
+
       try {
         const host = new URL(url).hostname.toLowerCase().replace('www.', '');
         isYouTube = host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be';
@@ -72,43 +75,65 @@ class VideoService {
           const match = url.match(/(?:\/status\/|\/post\/)([0-9]+)/);
           if (match) {
              try {
-               const res = await axios.get(`https://api.fxtwitter.com/status/${match[1]}`);
-               if (res.data && res.data.tweet && res.data.tweet.media && res.data.tweet.media.videos && res.data.tweet.media.videos.length > 0) {
-                 url = res.data.tweet.media.videos[0].url;
-                 logger.info(`Resolved Twitter video URL via fxtwitter: ${url}`);
-               } else if (res.data && res.data.tweet && res.data.tweet.media && res.data.tweet.media.all && res.data.tweet.media.all.length > 0) {
-                 const vid = res.data.tweet.media.all.find(m => m.type === 'video' || m.type === 'gif');
-                 if (vid) {
-                   url = vid.url;
-                   logger.info(`Resolved Twitter video URL via fxtwitter 'all': ${url}`);
-                 } else {
-                   const photos = res.data.tweet.media.all.filter(m => m.type === 'photo');
-                   if (photos.length > 0) {
-                     logger.info(`Found ${photos.length} photos in Twitter post, downloading...`);
-                     const imagePaths = [];
-                     for (let i = 0; i < photos.length; i++) {
-                       const photoUrl = photos[i].url;
-                       const imageFilename = generateFilename(`twitter_photo_${i}`, 'jpg');
-                       const imagePath = path.join(config.download.tempDir, imageFilename);
-                       const photoRes = await axios.get(photoUrl, { responseType: 'arraybuffer', timeout: 30000 });
-                       await fs.writeFile(imagePath, photoRes.data);
-                       imagePaths.push(imagePath);
-                     }
-                     return {
-                       type: 'slideshow',
-                       imagePaths,
-                       info: {
-                         author: res.data.tweet.author?.name || res.data.tweet.author?.screen_name || 'Twitter User',
-                         platform: 'Twitter/X',
-                         title: (res.data.tweet.text || 'Twitter Post').substring(0, 100)
-                       }
-                     };
-                   } else {
-                     throw new Error('NO_MEDIA_IN_TWEET');
-                   }
+               const res = await axios.get(`https://api.fxtwitter.com/status/${match[1]}`, { timeout: 10000 });
+               if (res.data && res.data.tweet) {
+                 const tweet = res.data.tweet;
+                 const authorName = tweet.author?.name ? tweet.author.name.trim() : '';
+                 const screenName = tweet.author?.screen_name ? tweet.author.screen_name.trim() : '';
+                 let authorDisplay = 'Twitter User';
+                 if (authorName && screenName && authorName.toLowerCase() !== screenName.toLowerCase()) {
+                   authorDisplay = `${authorName} (@${screenName})`;
+                 } else if (screenName) {
+                   authorDisplay = `@${screenName}`;
+                 } else if (authorName) {
+                   authorDisplay = authorName;
                  }
-               } else {
-                 throw new Error('NO_MEDIA_IN_TWEET');
+
+                 const tweetText = typeof tweet.text === 'string' ? tweet.text.trim() : '';
+
+                 metadataOverride = {
+                   title: tweetText || null,
+                   author: authorDisplay,
+                   platform: 'Twitter/X'
+                 };
+
+                 if (tweet.media && tweet.media.videos && tweet.media.videos.length > 0) {
+                   url = tweet.media.videos[0].url;
+                   logger.info(`Resolved Twitter video URL via fxtwitter: ${url}`);
+                 } else if (tweet.media && tweet.media.all && tweet.media.all.length > 0) {
+                   const vid = tweet.media.all.find(m => m.type === 'video' || m.type === 'gif');
+                   if (vid) {
+                     url = vid.url;
+                     logger.info(`Resolved Twitter video URL via fxtwitter 'all': ${url}`);
+                   } else {
+                     const photos = tweet.media.all.filter(m => m.type === 'photo');
+                     if (photos.length > 0) {
+                       logger.info(`Found ${photos.length} photos in Twitter post, downloading...`);
+                       const imagePaths = [];
+                       for (let i = 0; i < photos.length; i++) {
+                         const photoUrl = photos[i].url;
+                         const imageFilename = generateFilename(`twitter_photo_${i}`, 'jpg');
+                         const imagePath = path.join(config.download.tempDir, imageFilename);
+                         const photoRes = await axios.get(photoUrl, { responseType: 'arraybuffer', timeout: 30000 });
+                         await fs.writeFile(imagePath, photoRes.data);
+                         imagePaths.push(imagePath);
+                       }
+                       return {
+                         type: 'slideshow',
+                         imagePaths,
+                         info: {
+                           author: authorDisplay,
+                           platform: 'Twitter/X',
+                           title: tweetText || null
+                         }
+                       };
+                     } else {
+                       throw new Error('NO_MEDIA_IN_TWEET');
+                     }
+                   }
+                 } else {
+                   throw new Error('NO_MEDIA_IN_TWEET');
+                 }
                }
              } catch (txError) {
                logger.warn(`Failed to resolve via fxtwitter API: ${txError.message}`);
@@ -510,6 +535,23 @@ class VideoService {
         logger.warn(`Could not get file size: ${error.message}`);
       }
 
+      let finalTitle = title;
+      if (metadataOverride && metadataOverride.title !== undefined) {
+        finalTitle = metadataOverride.title;
+      } else if (title) {
+        // Discard raw twimg/CDN hashes like fRoo4x3VVAsr7E_p or HWFf-ozXgAAiQKk
+        if (/^[a-zA-Z0-9_-]{12,25}$/.test(title) && (url.includes('twimg.com') || originalInputUrl.includes('twitter.com') || originalInputUrl.includes('x.com'))) {
+          finalTitle = null;
+        }
+      }
+
+      let finalAuthor = author;
+      if (metadataOverride && metadataOverride.author) {
+        finalAuthor = metadataOverride.author;
+      }
+
+      const finalPlatform = metadataOverride?.platform || this.extractPlatform(originalInputUrl);
+
       return {
         filePath: downloadedFilePath,
         filename: path.basename(downloadedFilePath),
@@ -519,11 +561,11 @@ class VideoService {
         duration: duration,
         fileSize: fileSize,
         info: {
-          title: title,
-          author: author,
+          title: finalTitle,
+          author: finalAuthor,
           duration: duration ? formatDuration(duration) : 'Unknown',
           fileSize: formatFileSize(fileSize),
-          platform: this.extractPlatform(url),
+          platform: finalPlatform,
           quality: usedQuality
         }
       };
@@ -563,12 +605,12 @@ class VideoService {
   
   extractPlatform(url) {
     try {
-      const hostname = new URL(url).hostname;
+      const hostname = new URL(url).hostname.toLowerCase();
       
       if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) return 'YouTube';
       if (hostname.includes('tiktok.com')) return 'TikTok';
       if (hostname.includes('instagram.com')) return 'Instagram';
-      if (hostname.includes('twitter.com') || hostname.includes('x.com')) return 'Twitter';
+      if (hostname.includes('twitter.com') || hostname.includes('x.com') || hostname.includes('twimg.com')) return 'Twitter/X';
       if (hostname.includes('facebook.com') || hostname.includes('fb.watch')) return 'Facebook';
       if (hostname.includes('vimeo.com')) return 'Vimeo';
       if (hostname.includes('reddit.com')) return 'Reddit';

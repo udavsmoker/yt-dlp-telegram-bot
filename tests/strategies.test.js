@@ -128,5 +128,40 @@ describe('Download Strategies & Telegram Sender', () => {
       assert.ok(caption.includes('NatGeo'));
       assert.ok(caption.includes('1:30'));
     });
+
+    it('should omit dummy titles or raw CDN hashes from caption', () => {
+      const sender = { caption: 'Alice' };
+      const url = 'https://x.com/user/status/123';
+      const hashInfo = {
+        title: 'fRoo4x3VVAsr7E_p',
+        author: 'User (@user)',
+        platform: 'Twitter/X'
+      };
+      const caption1 = buildCaption(sender, url, hashInfo);
+      assert.ok(!caption1.includes('fRoo4x3VVAsr7E_p'));
+      assert.ok(caption1.includes('User (@user)'));
+      assert.ok(caption1.includes('Twitter/X'));
+
+      const dummyInfo = {
+        title: 'Twitter Video',
+        author: 'User',
+        platform: 'Twitter/X'
+      };
+      const caption2 = buildCaption(sender, url, dummyInfo);
+      assert.ok(!caption2.includes('Twitter Video'));
+    });
+
+    it('should escape HTML characters in title and author', () => {
+      const sender = { caption: 'Alice' };
+      const url = 'https://x.com/user/status/123';
+      const info = {
+        title: 'Tom & Jerry <fun>',
+        author: '<hacker> & co',
+        platform: 'Twitter/X'
+      };
+      const caption = buildCaption(sender, url, info);
+      assert.ok(caption.includes('Tom &amp; Jerry &lt;fun&gt;'));
+      assert.ok(caption.includes('&lt;hacker&gt; &amp; co'));
+    });
   });
 });

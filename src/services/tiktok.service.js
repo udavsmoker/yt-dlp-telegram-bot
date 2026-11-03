@@ -4,7 +4,7 @@ const path = require('path');
 const { promisify } = require('util');
 const execFile = promisify(require('child_process').execFile);
 const axios = require('axios');
-const { generateFilename, ensureDir, generateThumbnailFromVideo } = require('../utils/helpers');
+const { generateFilename, ensureDir, generateThumbnailFromVideo, formatFileSize } = require('../utils/helpers');
 const config = require('../config');
 const logger = require('../utils/logger');
 
@@ -67,7 +67,11 @@ class TikTokService {
 
       if (contentType === 'video') {
         // Merge video URLs from both APIs into priority-ordered list
-        // v3 HD (1080p) > tikwm HD (720p) > v3 SD (576p)
+        // Merge video URLs from both APIs into priority-ordered list:
+        // 1. TikWM HD (1080p Full HD from TikTok CDN, perfectly optimized bitrate ~8-20MB)
+        // 2. TikWM play (standard watermark-free 720p/576p stream ~5-10MB)
+        // 3. v3 HD (1080p fallback from muscdn, may be uncompressed raw master)
+        // 4. v3 SD (576p fallback)
         const mergedData = {
           _videoUrls: [],
           desc: v3Data?.desc || twData?.title,
@@ -76,17 +80,19 @@ class TikTokService {
           music: twData?.music_info?.play ? { playUrl: [twData.music_info.play] } : (v3Data?.music || undefined)
         };
 
-        // Add v3 HD URL (1080p, may be large)
+        // Add tikwm HD URL (1080p Full HD, optimal streaming bitrate)
+        if (twData?.hdplay) {
+          mergedData._videoUrls.push({ url: twData.hdplay, quality: 'tikwm HD (1080p)' });
+        }
+        // Add tikwm standard play (720p/576p)
+        if (twData?.play) {
+          mergedData._videoUrls.push({ url: twData.play, quality: 'tikwm play' });
+        }
+        // Fallback to v3 HD
         if (v3Data?.videoHD) {
           mergedData._videoUrls.push({ url: v3Data.videoHD, quality: 'v3 HD (1080p)' });
         }
-        // Add tikwm HD URL (720p, reliable size)
-        if (twData?.hdplay) {
-          mergedData._videoUrls.push({ url: twData.hdplay, quality: 'tikwm HD (720p)' });
-        } else if (twData?.play) {
-          mergedData._videoUrls.push({ url: twData.play, quality: 'tikwm play' });
-        }
-        // Add v3 SD URL (576p, last resort)
+        // Fallback to v3 SD (last resort)
         if (v3Data?.videoSD) {
           mergedData._videoUrls.push({ url: v3Data.videoSD, quality: 'v3 SD (576p)' });
         }
@@ -392,6 +398,34 @@ class TikTokService {
         logger.info(`TikTok video downloaded: ${fileSizeMB}MB`);
       }
 
+      // Optimize excessively large videos (>60MB) using visually lossless CRF 21 (prevents bloated 400MB raw camera masters)
+      try {
+        const currentStats = await fs.stat(finalVideoPath);
+        const currentMB = currentStats.size / (1024 * 1024);
+        if (currentMB > 60) {
+          logger.warn(`Excessively large TikTok video detected (${currentMB.toFixed(1)}MB), optimizing bitrate with CRF 21...`);
+          const optimizedPath = finalVideoPath.replace('.mp4', '_opt.mp4');
+          await execFile('ffmpeg', [
+            '-i', finalVideoPath,
+            '-c:v', 'libx264',
+            '-preset', 'veryfast',
+            '-crf', '21',
+            '-c:a', 'copy',
+            '-movflags', '+faststart',
+            optimizedPath
+          ], { timeout: 180000, signal });
+
+          await fs.unlink(finalVideoPath);
+          finalVideoPath = optimizedPath;
+          const newStats = await fs.stat(finalVideoPath);
+          fileSizeMB = (newStats.size / (1024 * 1024)).toFixed(2);
+          logger.info(`Optimized video size from ${currentMB.toFixed(1)}MB to ${fileSizeMB}MB`);
+        }
+      } catch (optError) {
+        if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
+        logger.warn(`Video optimization failed: ${optError.message} - continuing with original`);
+      }
+
       // Get duration and dimensions from the actual file using ffprobe
       let durationStr = 'Unknown';
       let durationSeconds = 0;
@@ -441,16 +475,24 @@ class TikTokService {
                           : height >= 1024 || width >= 1024 ? `${Math.min(width, height)}p`
                           : `${Math.min(width, height)}p`;
 
+      let finalFileSizeBytes = 0;
+      try {
+        const finalStats = await fs.stat(finalVideoPath);
+        finalFileSizeBytes = finalStats.size;
+        fileSizeMB = (finalFileSizeBytes / (1024 * 1024)).toFixed(2);
+      } catch {}
+
       return {
         type: 'video',
         filePath: finalVideoPath,
         thumbnailPath: thumbnailPath,
+        fileSize: finalFileSizeBytes,
         info: {
           title: data.desc || data.title || 'TikTok Video',
           author: data.author?.nickname || data.author?.uniqueId || data.author?.unique_id || 'Unknown',
           platform: 'TikTok',
           duration: durationStr,
-          fileSize: `${fileSizeMB} MB`,
+          fileSize: formatFileSize(finalFileSizeBytes),
           quality: actualQuality
         },
         width: width,

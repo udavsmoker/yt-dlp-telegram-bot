@@ -177,6 +177,11 @@ class CacheService {
         }
       }
 
+      if (hostname === 'soundcloud.com' || hostname === 'm.soundcloud.com') {
+        hostname = 'soundcloud.com';
+        parsed.searchParams.delete('in');
+      }
+
       // Generic cleanup: strip known tracking and telemetry parameters
       const trackingParams = [
         'si', 'obrf', 'feature', 'igsh', 'fbclid', 'gclid', 'ref', 'ref_src',

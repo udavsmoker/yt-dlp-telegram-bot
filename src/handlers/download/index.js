@@ -14,6 +14,7 @@ const InstagramStrategy = require('./strategies/instagram.strategy');
 const TikTokStrategy = require('./strategies/tiktok.strategy');
 const BlueskyStrategy = require('./strategies/bluesky.strategy');
 const SpotifyStrategy = require('./strategies/spotify.strategy');
+const SoundCloudStrategy = require('./strategies/soundcloud.strategy');
 const GenericStrategy = require('./strategies/generic.strategy');
 const { handleMp3Command, handleAudioCallback } = require('./audio/audio-extractor');
 
@@ -22,6 +23,7 @@ const instagramStrategy = new InstagramStrategy();
 const tiktokStrategy = new TikTokStrategy();
 const blueskyStrategy = new BlueskyStrategy();
 const spotifyStrategy = new SpotifyStrategy();
+const soundcloudStrategy = new SoundCloudStrategy();
 const genericStrategy = new GenericStrategy();
 
 const strategies = [
@@ -30,6 +32,7 @@ const strategies = [
   tiktokStrategy,
   blueskyStrategy,
   spotifyStrategy,
+  soundcloudStrategy,
   genericStrategy
 ];
 
@@ -104,6 +107,21 @@ async function handleDownload(ctx, next) {
     return;
   }
 
+  // SoundCloud check (single track or set/playlist prompt)
+  if (soundcloudStrategy.canHandle(url)) {
+    if (userId) {
+      const rateLimit = downloadLimiter.check(String(userId));
+      if (rateLimit.limited) {
+        await ctx.reply('⏱ Please wait a moment before making another request.');
+        return;
+      }
+    }
+    soundcloudStrategy.handle(ctx, { url, userInfo, originalMessageId }).catch(error => {
+      logger.error(`Background download error for ${userInfo} in ${soundcloudStrategy.name}:`, error);
+    });
+    return;
+  }
+
   // Rate limiting for immediate downloads
   if (userId) {
     const rateLimit = downloadLimiter.check(String(userId));
@@ -149,13 +167,23 @@ async function handleSpotifyCallback(ctx) {
   return spotifyStrategy.handleCallback(ctx);
 }
 
+/**
+ * Handle callback queries from SoundCloud inline keyboard.
+ * @param {object} ctx
+ */
+async function handleSoundCloudCallback(ctx) {
+  return soundcloudStrategy.handleCallback(ctx);
+}
+
 module.exports = {
   handleDownload,
   handleYouTubeCallback,
   handleInstagramCallback,
   handleSpotifyCallback,
+  handleSoundCloudCallback,
   handleMp3Command,
   handleAudioCallback,
   youtubeStrategy,
-  spotifyStrategy
+  spotifyStrategy,
+  soundcloudStrategy
 };

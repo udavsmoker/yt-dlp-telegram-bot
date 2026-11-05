@@ -42,6 +42,11 @@ describe('CacheService (SQLite & URL Normalization)', () => {
       const normalized = cache.normalizeUrl('https://open.spotify.com/intl-ru/track/4cOdK2wGLETKBW3PvgPWqT?si=abc123xyz&utm_source=copy-link');
       assert.equal(normalized, 'https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT');
     });
+
+    it('should canonicalize SoundCloud URLs by stripping in and tracking queries', () => {
+      const normalized = cache.normalizeUrl('https://m.soundcloud.com/artist/track-name?in=artist/sets/album&si=abc123xyz&utm_source=clipboard');
+      assert.equal(normalized, 'https://soundcloud.com/artist/track-name');
+    });
   });
 
   describe('Cache storage and retrieval', () => {

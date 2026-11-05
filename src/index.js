@@ -9,7 +9,7 @@ const { blacklistCheckMiddleware } = require('./middleware/blacklist.middleware'
 const handleStart = require('./handlers/start.handler');
 const handleHelp = require('./handlers/help.handler');
 const handleAbout = require('./handlers/about.handler');
-const { handleDownload, handleYouTubeCallback, handleInstagramCallback, handleSpotifyCallback, handleMp3Command, handleAudioCallback } = require('./handlers/download.handler');
+const { handleDownload, handleYouTubeCallback, handleInstagramCallback, handleSpotifyCallback, handleSoundCloudCallback, handleMp3Command, handleAudioCallback } = require('./handlers/download.handler');
 const handleMeme = require('./handlers/meme.handler');
 const { handleDemotivate, handlePhotoStats } = require('./handlers/demotivator.handler');
 const { handleSettings, handleSettingsCallback } = require('./handlers/settings.handler');
@@ -110,6 +110,9 @@ bot.action('insta_all', handleInstagramCallback);
 
 // Spotify playlist/album confirmation callbacks
 bot.action(['spot_download', 'spot_cancel'], handleSpotifyCallback);
+
+// SoundCloud set confirmation callbacks
+bot.action(['sc_download', 'sc_cancel'], handleSoundCloudCallback);
 
 // Song search selection and cancellation callbacks
 bot.action(/^s_dl_/, handleSearchCallback);

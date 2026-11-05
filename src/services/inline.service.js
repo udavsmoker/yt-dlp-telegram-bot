@@ -2,6 +2,7 @@ const axios = require('axios');
 const cacheService = require('./cache.service');
 const spotifyAudioService = require('./spotify-audio.service');
 const spotifyService = require('./spotify.service');
+const soundcloudService = require('./soundcloud.service');
 const logger = require('../utils/logger');
 const { escapeHtml, formatDuration, isTikTokUrl, isYouTubeUrl, isInstagramUrl, isTwitterUrl, formatCount } = require('../utils/helpers');
 
@@ -337,7 +338,59 @@ class InlineService {
       }
     }
 
-    // 4. Instagram resolution (download directly into chat)
+    // 4. SoundCloud resolution (audio track download directly into chat)
+    if (soundcloudService.isSoundCloudUrl(url)) {
+      const shortToken = this.createShortLink(url);
+      let title = 'SoundCloud Track';
+      let author = 'SoundCloud Artist';
+      let thumb = 'https://cdn-icons-png.flaticon.com/128/145/145809.png';
+      let duration = 0;
+
+      try {
+        const meta = await soundcloudService.getMetadata(url);
+        if (meta) {
+          if (meta.title) title = meta.title;
+          if (meta.artist) author = meta.artist;
+          if (meta.thumbnail) thumb = meta.thumbnail;
+          if (meta.duration) duration = meta.duration;
+        }
+      } catch (err) {
+        logger.warn(`Inline SoundCloud metadata fetch failed: ${err.message}`);
+      }
+
+      const resultKey = `sc_${shortToken}`;
+      const trackPayload = {
+        id: resultKey,
+        url,
+        title,
+        artist: author,
+        coverUrl: thumb,
+        durationMs: duration * 1000
+      };
+      this.setPendingTrack(resultKey, trackPayload);
+
+      results.push({
+        type: 'article',
+        id: resultKey,
+        title: title,
+        description: `${author} • 320 kbps MP3`,
+        thumb_url: thumb,
+        input_message_content: {
+          message_text: `⏳ <b>Downloading:</b> ${escapeHtml(author)} — ${escapeHtml(title)}...`,
+          parse_mode: 'HTML'
+        },
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '⬇️ Download (320 kbps MP3)', callback_data: `inline_dl:${resultKey}` }
+            ]
+          ]
+        }
+      });
+      return results;
+    }
+
+    // 5. Instagram resolution (download directly into chat)
     if (isInstagramUrl(url)) {
       const shortToken = this.createShortLink(url);
       results.push({

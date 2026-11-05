@@ -188,6 +188,42 @@ describe('Cancel Handler & Download Cancellation', () => {
       assert.ok(edited[0].text.includes('Sent <b>5/50</b> tracks before cancellation.'));
     });
 
+    it('should cancel active SoundCloud set download and update status with count', async () => {
+      const { soundcloudStrategy } = require('../src/handlers/download');
+      const abortController = new AbortController();
+
+      soundcloudStrategy.activePlaylists.set(666, {
+        abortController,
+        chatId: 100,
+        userId: 55,
+        statusMessageId: 666,
+        title: 'Chill Lo-Fi',
+        total: 20,
+        getCompletedCount: () => 3
+      });
+
+      const edited = [];
+      const ctx = {
+        chat: { id: 100, type: 'private' },
+        from: { id: 55 },
+        message: { message_id: 889, text: '/cancel' },
+        deleteMessage: async () => {},
+        telegram: {
+          editMessageText: async (chatId, msgId, _inline, text, opts) => {
+            edited.push({ msgId, text, opts });
+          }
+        }
+      };
+
+      await handleCancel(ctx);
+
+      assert.equal(abortController.signal.aborted, true);
+      assert.equal(edited.length, 1);
+      assert.equal(edited[0].msgId, 666);
+      assert.ok(edited[0].text.includes('Playlist download cancelled: Chill Lo-Fi'));
+      assert.ok(edited[0].text.includes('Sent <b>3/20</b> tracks before cancellation.'));
+    });
+
     it('should cancel pending YouTube selection keyboard', async () => {
       youtubeStrategy.pendingYouTubeDownloads.set(990, {
         userId: 88,

@@ -11,7 +11,7 @@ async function handleHelp(ctx) {
   const helpMessage = `📖 <b>Bot Command Center</b>
 
 <b>📥 Media & Music Downloads:</b>
-• <b>Send any link:</b> Automatically downloads video or Spotify audio
+• <b>Send any link:</b> Automatically downloads video or Spotify/SoundCloud audio
 • <code>/song &lt;title&gt;</code> — Search and download music directly <i>(aliases: /music, /track, /search)</i>
 • <i>In private chat:</i> send any song name without commands to search
 • <code>/mp3</code> — Extract audio from a video (reply to any video message)

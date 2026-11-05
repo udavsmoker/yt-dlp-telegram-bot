@@ -1,5 +1,5 @@
 const queueService = require('../services/queue.service');
-const { youtubeStrategy, spotifyStrategy } = require('./download');
+const { youtubeStrategy, spotifyStrategy, soundcloudStrategy } = require('./download');
 const { cancelPendingSearch } = require('./search.handler');
 const { isAdmin, getUserInfo, escapeHtml } = require('../utils/helpers');
 const logger = require('../utils/logger');
@@ -18,11 +18,19 @@ async function handleCancel(ctx) {
   const userId = ctx.from?.id;
   const isChatAdmin = await isAdmin(ctx);
 
-  // 1. Check for active Spotify playlist download
+  // 1. Check for active Spotify or SoundCloud playlist/set download
   let spotActiveResult = null;
   if (spotifyStrategy && typeof spotifyStrategy.cancelActive === 'function') {
     spotActiveResult = spotifyStrategy.cancelActive(chatId, targetMessageId, userId, isChatAdmin);
     if (spotActiveResult && spotActiveResult.unauthorized) {
+      return ctx.reply('⚠️ You can only cancel your own downloads. Ask a chat admin to cancel it.');
+    }
+  }
+
+  let scActiveResult = null;
+  if (soundcloudStrategy && typeof soundcloudStrategy.cancelActive === 'function') {
+    scActiveResult = soundcloudStrategy.cancelActive(chatId, targetMessageId, userId, isChatAdmin);
+    if (scActiveResult && scActiveResult.unauthorized) {
       return ctx.reply('⚠️ You can only cancel your own downloads. Ask a chat admin to cancel it.');
     }
   }
@@ -34,19 +42,21 @@ async function handleCancel(ctx) {
     return ctx.reply('⚠️ You can only cancel your own downloads. Ask a chat admin to cancel it.');
   }
 
-  if (spotActiveResult && spotActiveResult.statusMessageId) {
-    logger.info(`Spotify playlist #${spotActiveResult.statusMessageId} cancelled by ${userInfo}`);
+  const activeSetResult = spotActiveResult || scActiveResult;
+  if (activeSetResult && activeSetResult.statusMessageId) {
+    const platformLabel = spotActiveResult ? 'Spotify playlist' : 'SoundCloud set';
+    logger.info(`${platformLabel} #${activeSetResult.statusMessageId} cancelled by ${userInfo}`);
 
     // Delete user's /cancel command message
     try {
       await ctx.deleteMessage();
     } catch {}
 
-    const title = spotActiveResult.title || 'Playlist';
-    const sentCount = typeof spotActiveResult.getCompletedCount === 'function'
-      ? spotActiveResult.getCompletedCount()
-      : (spotActiveResult.completedCount || 0);
-    const totalCount = spotActiveResult.total || 0;
+    const title = activeSetResult.title || 'Set/Playlist';
+    const sentCount = typeof activeSetResult.getCompletedCount === 'function'
+      ? activeSetResult.getCompletedCount()
+      : (activeSetResult.completedCount || 0);
+    const totalCount = activeSetResult.total || 0;
 
     const cancelMsg = [
       `🛑 <b>Playlist download cancelled: ${escapeHtml(title)}</b>`,
@@ -54,7 +64,7 @@ async function handleCancel(ctx) {
     ].join('\n');
 
     try {
-      await ctx.telegram.editMessageText(chatId, spotActiveResult.statusMessageId, null, cancelMsg, { parse_mode: 'HTML' });
+      await ctx.telegram.editMessageText(chatId, activeSetResult.statusMessageId, null, cancelMsg, { parse_mode: 'HTML' });
     } catch {
       try {
         await ctx.reply(cancelMsg, { parse_mode: 'HTML' });
@@ -146,7 +156,31 @@ async function handleCancel(ctx) {
     }
   }
 
-  // 4. Try cancelling pending song search prompt
+  // 4. Try cancelling pending SoundCloud confirmation prompt
+  if (soundcloudStrategy && typeof soundcloudStrategy.cancelPending === 'function') {
+    const scResult = soundcloudStrategy.cancelPending(chatId, targetMessageId, userId, isChatAdmin);
+    if (scResult && scResult.unauthorized) {
+      return ctx.reply('⚠️ You can only cancel your own requests. Ask a chat admin to cancel it.');
+    }
+    if (scResult && scResult.messageId) {
+      try {
+        await ctx.telegram.deleteMessage(chatId, scResult.messageId);
+      } catch {}
+      try {
+        await ctx.deleteMessage();
+      } catch {}
+
+      try {
+        const confirmation = await ctx.reply('❌ Request cancelled.');
+        setTimeout(() => {
+          ctx.telegram.deleteMessage(chatId, confirmation.message_id).catch(() => {});
+        }, 3000);
+      } catch {}
+      return;
+    }
+  }
+
+  // 5. Try cancelling pending song search prompt
   const searchResult = cancelPendingSearch(chatId, targetMessageId, userId, isChatAdmin);
   if (searchResult && searchResult.unauthorized) {
     return ctx.reply('⚠️ You can only cancel your own requests. Ask a chat admin to cancel it.');

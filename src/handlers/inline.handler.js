@@ -2,6 +2,7 @@ const axios = require('axios');
 const inlineService = require('../services/inline.service');
 const spotifyAudioService = require('../services/spotify-audio.service');
 const spotifyService = require('../services/spotify.service');
+const soundcloudService = require('../services/soundcloud.service');
 const videoService = require('../services/video.service');
 const cacheService = require('../services/cache.service');
 const config = require('../config');
@@ -253,6 +254,91 @@ async function processInlineMusicDownload(ctx, resultId, inlineMessageId, botUse
 }
 
 /**
+ * Background worker to download and deliver an inline SoundCloud track to chat.
+ * Replaces the temporary placeholder message with native audio player.
+ * @param {object} ctx
+ * @param {string} resultId
+ * @param {string} inlineMessageId
+ * @param {string} botUsername
+ */
+async function processInlineSoundCloudDownload(ctx, resultId, inlineMessageId, botUsername) {
+  if (inlineMessageId) {
+    if (activeInlineDownloads.has(inlineMessageId)) return;
+    activeInlineDownloads.add(inlineMessageId);
+  }
+
+  const track = inlineService.getPendingTrack(resultId);
+  if (!track) {
+    logger.warn(`No metadata found for inline SoundCloud download: ${resultId}`);
+    if (inlineMessageId) activeInlineDownloads.delete(inlineMessageId);
+    return;
+  }
+
+  logger.info(`Starting automatic inline SoundCloud download for "${track.title}" by "${track.artist}"`);
+  let result = null;
+
+  try {
+    if (inlineMessageId) {
+      await ctx.telegram.editMessageReplyMarkup(undefined, undefined, inlineMessageId, {
+        inline_keyboard: [
+          [
+            { text: '⏳ Downloading 320k MP3...', callback_data: 'inline_wait:busy' }
+          ]
+        ]
+      }).catch(() => {});
+    }
+
+    result = await soundcloudService.downloadAndTagTrack(track);
+
+    const staging = await uploadAudioStaging(ctx, result.audioPath, {
+      title: result.title,
+      performer: result.artist,
+      duration: result.duration,
+      ...(result.thumbnailPath ? { thumbnail: getFileForTelegram(result.thumbnailPath) } : {})
+    });
+
+    if (staging?.fileId) {
+      await ctx.telegram.editMessageMedia(
+        undefined, undefined, inlineMessageId,
+        {
+          type: 'audio',
+          media: staging.fileId
+        }
+      );
+
+      await ctx.telegram.deleteMessage(staging.chatId, staging.messageId).catch(() => {});
+
+      if (track.url) {
+        cacheService.set(track.url, {
+          fileId: staging.fileId,
+          fileType: 'audio',
+          title: result.title,
+          author: result.artist,
+          duration: String(result.duration || 0),
+          fileSize: result.fileSize
+        });
+      }
+
+      logger.info(`Successfully delivered inline SoundCloud audio "${result.title}" to message ${inlineMessageId}`);
+    } else {
+      logger.warn(`Could not obtain file_id for inline SoundCloud audio "${result.title}"`);
+    }
+  } catch (err) {
+    logger.error(`Failed to process inline SoundCloud download for "${track.title}": ${err.message}`);
+    try {
+      await ctx.telegram.editMessageText(
+        undefined, undefined, inlineMessageId,
+        `❌ <b>Download Failed:</b> ${escapeHtml(err.message)}`,
+        { parse_mode: 'HTML' }
+      );
+    } catch {}
+  } finally {
+    if (inlineMessageId) activeInlineDownloads.delete(inlineMessageId);
+    if (result?.cleanup) await result.cleanup();
+  }
+}
+
+/**
  * Background worker to download and deliver an inline video (Instagram, YouTube, generic) to chat.
  * Replaces the temporary "Downloading..." article message with native video player.
  * @param {object} ctx
@@ -399,6 +485,14 @@ async function handleChosenInlineResult(ctx) {
     return;
   }
 
+  // SoundCloud tracks
+  if (resultId.startsWith('sc_')) {
+    processInlineSoundCloudDownload(ctx, resultId, inlineMessageId, botUsername).catch(err => {
+      logger.error(`Unhandled error in inline SoundCloud processing: ${err.message}`);
+    });
+    return;
+  }
+
   // Videos (Instagram, YouTube, generic): automatically download and replace placeholder with video
   if (resultId.startsWith('ig_') || resultId.startsWith('yt_') || resultId.startsWith('gen_')) {
     processInlineVideoDownload(ctx, resultId, inlineMessageId, botUsername).catch(err => {
@@ -438,6 +532,14 @@ async function handleInlineDownloadCallback(ctx) {
     const fullId = targetId.startsWith('song_') || targetId.startsWith('spot_') ? targetId : `song_${targetId}`;
     processInlineMusicDownload(ctx, fullId, inlineMessageId, botUsername).catch(err => {
       logger.error(`Unhandled error in inline music processing via callback: ${err.message}`);
+    });
+    return;
+  }
+
+  // SoundCloud tracks
+  if (targetId.startsWith('sc_')) {
+    processInlineSoundCloudDownload(ctx, targetId, inlineMessageId, botUsername).catch(err => {
+      logger.error(`Unhandled error in inline SoundCloud processing via callback: ${err.message}`);
     });
     return;
   }

@@ -6,6 +6,7 @@ const YouTubeStrategy = require('../src/handlers/download/strategies/youtube.str
 const InstagramStrategy = require('../src/handlers/download/strategies/instagram.strategy');
 const TikTokStrategy = require('../src/handlers/download/strategies/tiktok.strategy');
 const BlueskyStrategy = require('../src/handlers/download/strategies/bluesky.strategy');
+const SoundCloudStrategy = require('../src/handlers/download/strategies/soundcloud.strategy');
 const GenericStrategy = require('../src/handlers/download/strategies/generic.strategy');
 const { getSenderInfo, buildCaption, truncateTitle } = require('../src/handlers/download/common/telegram-sender');
 
@@ -15,6 +16,7 @@ describe('Download Strategies & Telegram Sender', () => {
     const instagram = new InstagramStrategy();
     const tiktok = new TikTokStrategy();
     const bluesky = new BlueskyStrategy();
+    const soundcloud = new SoundCloudStrategy();
     const generic = new GenericStrategy();
 
     it('should correctly match YouTube URLs', () => {
@@ -38,6 +40,13 @@ describe('Download Strategies & Telegram Sender', () => {
     it('should correctly match Bluesky URLs', () => {
       assert.equal(bluesky.canHandle('https://bsky.app/profile/user.bsky.social/post/3k123'), true);
       assert.equal(bluesky.canHandle('https://twitter.com/user/status/1'), false);
+    });
+
+    it('should correctly match SoundCloud URLs', () => {
+      assert.equal(soundcloud.canHandle('https://soundcloud.com/artist/track-slug'), true);
+      assert.equal(soundcloud.canHandle('https://m.soundcloud.com/artist/sets/album'), true);
+      assert.equal(soundcloud.canHandle('https://on.soundcloud.com/abcde'), true);
+      assert.equal(soundcloud.canHandle('https://youtube.com/watch?v=1'), false);
     });
 
     it('should act as catch-all fallback for other supported platforms', () => {

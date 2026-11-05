@@ -49,7 +49,7 @@ Send me any supported link, and I will deliver the highest quality media directl
 
 📥 <b>Supported Features:</b>
 • <b>Videos:</b> YouTube, TikTok, Instagram (Reels, Posts, Carousels), X/Twitter, Bluesky, Reddit, and more (up to ${maxSize})
-• <b>Spotify Music:</b> Tracks, Albums, and Playlists in 320 kbps MP3 with embedded album art and ID3 metadata
+• <b>Music Platforms:</b> Spotify & SoundCloud (Tracks, Albums, Playlists & Sets) in 320 kbps MP3 with embedded album art and ID3 metadata
 • <b>Inline Mode:</b> Type <code>@${ctx.botInfo?.username || 'bot'}</code> in any chat to share videos or search songs!
 • <b>Song Search:</b> Type any song title in private chat or use <code>/song &lt;title&gt;</code>
 • <b>Audio Extraction & Tagging:</b> <code>/mp3</code>, <code>/tag Title - Artist</code>, <code>/cover</code>

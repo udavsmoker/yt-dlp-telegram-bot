@@ -166,6 +166,11 @@ class InstagramStrategy extends BaseStrategy {
 
           // Fallback to yt-dlp if service indicates direct download did not yield media
           if (result.type === 'video' && result.shouldFallback) {
+            // yt-dlp cannot handle photo-only posts — skip video fallback for those
+            if (result.isPhotoPostCandidate) {
+              throw new Error('Could not download this Instagram photo post. Please try again later.');
+            }
+
             await ctx.telegram.editMessageText(
               ctx.chat.id,
               statusMessage.message_id,

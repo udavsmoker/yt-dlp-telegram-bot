@@ -100,6 +100,16 @@ class InstagramService {
       if (validItems.length === 0) {
         logger.warn(`btch-downloader returned no valid media URLs for ${cleanUrlStr} after ${maxRetries} attempts`);
         const isReel = url.includes('/reel/') || url.includes('/reels/');
+
+        // For non-reel posts (likely photo posts), try oEmbed thumbnail fallback
+        // before falling back to yt-dlp (which cannot handle photo-only posts)
+        if (!isReel) {
+          const oembedPhoto = await this._tryOembedPhotoFallback(url, signal);
+          if (oembedPhoto) {
+            return oembedPhoto;
+          }
+        }
+
         return { type: 'video', shouldFallback: true, isPhotoPostCandidate: !isReel };
       }
 
@@ -380,6 +390,96 @@ class InstagramService {
     }
   }
 
+
+  /**
+   * Fallback: download photo from oEmbed thumbnail URL when btch-downloader fails.
+   * Uses images.weserv.nl as a proxy to bypass Meta CDN blocks (RKN).
+   * Returns a result object compatible with the main download flow, or null on failure.
+   */
+  async _tryOembedPhotoFallback(url, signal) {
+    try {
+      logger.info(`Attempting oEmbed photo fallback for: ${url}`);
+      
+      const oembedUrl = `https://www.instagram.com/api/v1/oembed/?url=${encodeURIComponent(url)}&maxwidth=2048&hidecaption=false&omitscript=true`;
+      const oembedRes = await axios.get(oembedUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        timeout: 8000,
+        signal
+      });
+
+      const thumbnailUrl = oembedRes.data?.thumbnail_url;
+      if (!thumbnailUrl) {
+        logger.warn('oEmbed fallback: no thumbnail_url in response');
+        return null;
+      }
+
+      const meta = {
+        title: oembedRes.data.title || 'Instagram Post',
+        author: oembedRes.data.author_name || 'Unknown'
+      };
+
+      await ensureDir(config.download.tempDir);
+      const filenamePrefix = generateFilename('insta', '');
+      const photoPath = path.join(config.download.tempDir, `${filenamePrefix.replace(/\.$/, '')}_oembed.jpg`);
+
+      // Try downloading via weserv.nl proxy (bypasses Meta CDN geo-blocks)
+      let response;
+      const proxyUrl = `https://images.weserv.nl/?url=${encodeURIComponent(thumbnailUrl)}`;
+      try {
+        response = await axios({
+          method: 'GET',
+          url: proxyUrl,
+          responseType: 'arraybuffer',
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+          signal,
+          timeout: 15000
+        });
+      } catch (proxyErr) {
+        if (signal?.aborted || proxyErr.name === 'CanceledError' || proxyErr.name === 'AbortError') {
+          throw new Error('DOWNLOAD_CANCELLED');
+        }
+        logger.warn(`oEmbed fallback: weserv proxy failed (${proxyErr.message}), trying direct`);
+        // Try direct download as last resort
+        response = await axios({
+          method: 'GET',
+          url: thumbnailUrl,
+          responseType: 'arraybuffer',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.instagram.com/'
+          },
+          signal,
+          timeout: 15000
+        });
+      }
+
+      await fs.writeFile(photoPath, response.data);
+      const fileSize = response.data.byteLength || response.data.length || 0;
+      logger.info(`oEmbed photo fallback success: ${formatFileSize(fileSize)}`);
+
+      return {
+        type: 'mixed',
+        media: [{ type: 'photo', path: photoPath, thumbnailPath: null }],
+        imagePaths: [photoPath],
+        videoPaths: [],
+        info: {
+          title: meta.title,
+          author: meta.author,
+          platform: 'Instagram',
+          duration: null,
+          fileSize: formatFileSize(fileSize),
+          imageCount: 1,
+          videoCount: 0
+        }
+      };
+    } catch (error) {
+      if (error.message === 'DOWNLOAD_CANCELLED') throw error;
+      logger.warn(`oEmbed photo fallback failed: ${error.message}`);
+      return null;
+    }
+  }
 
 }
 

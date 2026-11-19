@@ -370,11 +370,58 @@ async function generateThumbnailFromVideo(videoPath, outputPath = null) {
   }
 }
 
-function getFileForTelegram(filePath) {
+/**
+ * Sanitize a string for safe use as a filename.
+ * Strips path separators, control characters, and characters illegal on Windows.
+ * @param {string} name
+ * @returns {string}
+ */
+function sanitizeFilename(name) {
+  if (!name) return 'track';
+  return name
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '') // Windows-illegal + control chars
+    .replace(/\s+/g, ' ')                    // collapse whitespace
+    .trim()
+    .substring(0, 200)                       // cap length
+    || 'track';
+}
+
+/**
+ * Prepare a file reference for the Telegram Bot API.
+ * When a custom displayFilename is provided and the bot uses a local Bot API
+ * server (file:// protocol), a symlink with the desired name is created so the
+ * recipient sees a human-readable filename (e.g. "Artist - Title.mp3").
+ *
+ * @param {string} filePath - Path to the actual file on disk
+ * @param {string} [displayFilename] - Desired filename visible to the user
+ * @returns {string|object} file:// URI or Telegraf Input object
+ */
+function getFileForTelegram(filePath, displayFilename) {
   if (config.botApiUrl && (config.botApiUrl.includes('localhost') || config.botApiUrl.includes('127.0.0.1'))) {
+    if (displayFilename) {
+      // Create a symlink with the display name so local Bot API serves it with
+      // a human-readable filename. The symlink lives next to the original file.
+      const dir = path.dirname(path.resolve(filePath));
+      const resolvedTarget = path.resolve(filePath);
+      const linkPath = path.join(dir, sanitizeFilename(displayFilename));
+      if (linkPath === resolvedTarget) {
+        return 'file://' + linkPath;
+      }
+      try {
+        const fsSync = require('fs');
+        // Remove stale symlink if exists
+        try { fsSync.unlinkSync(linkPath); } catch {}
+        fsSync.symlinkSync(resolvedTarget, linkPath);
+        return 'file://' + linkPath;
+      } catch (e) {
+        // If symlink fails (e.g. same name), fall back to original path
+        const logger = require('./logger');
+        logger.warn(`Could not create display-name symlink: ${e.message}`);
+      }
+    }
     return 'file://' + path.resolve(filePath);
   }
-  return Input.fromLocalFile(filePath);
+  return Input.fromLocalFile(filePath, displayFilename);
 }
 
 function formatFileSize(bytes) {
@@ -415,8 +462,8 @@ function startTempCleanup(dirPath, maxAgeMs = 30 * 60 * 1000, intervalMs = 10 * 
       for (const file of files) {
         try {
           const filePath = path.join(dirPath, file);
-          const stat = await fs.stat(filePath);
-          if (stat.isFile() && (now - stat.mtimeMs) > maxAgeMs) {
+          const stat = await fs.lstat(filePath);
+          if ((stat.isFile() || stat.isSymbolicLink()) && (now - stat.mtimeMs) > maxAgeMs) {
             await fs.unlink(filePath);
             cleaned++;
           }
@@ -528,6 +575,7 @@ module.exports = {
   generateFilename,
   getUserInfo,
   getFileForTelegram,
+  sanitizeFilename,
   prepareThumbnail,
   generateThumbnailFromVideo,
   isValidVideoUrl,

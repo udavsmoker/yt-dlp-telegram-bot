@@ -2,7 +2,7 @@ const audioService = require('../services/audio.service');
 const undoService = require('../services/undo.service');
 const { getTelegramFileLocalPath } = require('./download/common/local-storage');
 const logger = require('../utils/logger');
-const { cleanupFile, getFileForTelegram, getUserInfo, escapeHtml } = require('../utils/helpers');
+const { cleanupFile, getFileForTelegram, sanitizeFilename, getUserInfo, escapeHtml } = require('../utils/helpers');
 
 /**
  * Parse title and artist from raw string.
@@ -129,7 +129,8 @@ async function handleTagCommand(ctx) {
       audioOptions.thumbnail = getFileForTelegram(coverLocal.localPath);
     }
 
-    const sent = await ctx.replyWithAudio(getFileForTelegram(result.audioPath), audioOptions);
+    const tagDisplayName = `${result.artist || 'Unknown'} - ${result.title || 'Audio'}.mp3`;
+    const sent = await ctx.replyWithAudio(getFileForTelegram(result.audioPath, sanitizeFilename(tagDisplayName)), audioOptions);
 
     if (sent && ctx.chat?.id) {
       undoService.record(ctx.chat.id, [sent.message_id], ctx.from?.id);

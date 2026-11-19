@@ -4,7 +4,7 @@ const axios = require('axios');
 const config = require('../../../config');
 const audioService = require('../../../services/audio.service');
 const logger = require('../../../utils/logger');
-const { cleanupFile, generateFilename, getFileForTelegram, getUserInfo } = require('../../../utils/helpers');
+const { cleanupFile, generateFilename, getFileForTelegram, sanitizeFilename, getUserInfo } = require('../../../utils/helpers');
 const { getVideoLocalPath } = require('../common/local-storage');
 const { getSenderInfo } = require('../common/telegram-sender');
 
@@ -108,8 +108,11 @@ async function handleMp3Command(ctx) {
       audioOptions.thumbnail = getFileForTelegram(thumbPath);
     }
 
+    const extractTitle = (title !== 'Audio' ? title : null) || (audioResult.title !== 'Audio' ? audioResult.title : 'Audio');
+    const extractArtist = (author !== 'Unknown' ? author : null) || (audioResult.artist !== 'Unknown' ? audioResult.artist : 'Unknown');
+    const extractDisplayName = `${extractArtist} - ${extractTitle}.mp3`;
     const sentAudio = await ctx.replyWithAudio(
-      getFileForTelegram(audioResult.audioPath),
+      getFileForTelegram(audioResult.audioPath, sanitizeFilename(extractDisplayName)),
       audioOptions
     );
 
@@ -230,8 +233,11 @@ async function processAudioExtraction(ctx, videoFileId, userId, title, author, t
       audioOptions.thumbnail = getFileForTelegram(thumbPath);
     }
 
+    const extractTitle = (title !== 'Audio' ? title : null) || (audioResult.title !== 'Audio' ? audioResult.title : 'Audio');
+    const extractArtist = (author !== 'Unknown' ? author : null) || (audioResult.artist !== 'Unknown' ? audioResult.artist : 'Unknown');
+    const extractDisplayName = `${extractArtist} - ${extractTitle}.mp3`;
     const sentAudio = await ctx.replyWithAudio(
-      getFileForTelegram(audioResult.audioPath),
+      getFileForTelegram(audioResult.audioPath, sanitizeFilename(extractDisplayName)),
       audioOptions
     );
 

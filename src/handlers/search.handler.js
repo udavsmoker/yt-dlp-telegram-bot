@@ -5,7 +5,7 @@ const undoService = require('../services/undo.service');
 const cacheService = require('../services/cache.service');
 const { tryServeFromCache, cacheSentMedia } = require('./download/common/cache-helper');
 const logger = require('../utils/logger');
-const { getFileForTelegram, renderProgressBar, getUserInfo, formatDuration } = require('../utils/helpers');
+const { getFileForTelegram, sanitizeFilename, renderProgressBar, getUserInfo, formatDuration } = require('../utils/helpers');
 const { getSenderInfo } = require('./download/common/telegram-sender');
 const { downloadLimiter } = require('../middleware/rate-limit.middleware');
 
@@ -299,8 +299,9 @@ async function downloadSelectedTrack(ctx, track, statusMessageId, triggerMessage
         audioOpts.thumbnail = getFileForTelegram(result.thumbnailPath);
       }
 
+      const searchDisplayName = `${result.artist} - ${result.title}.mp3`;
       const sentAudio = await ctx.replyWithAudio(
-        getFileForTelegram(result.audioPath),
+        getFileForTelegram(result.audioPath, sanitizeFilename(searchDisplayName)),
         audioOpts
       );
 

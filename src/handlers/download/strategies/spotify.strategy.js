@@ -6,7 +6,7 @@ const undoService = require('../../../services/undo.service');
 const cacheService = require('../../../services/cache.service');
 const { tryServeFromCache, cacheSentMedia } = require('../common/cache-helper');
 const logger = require('../../../utils/logger');
-const { getFileForTelegram, renderProgressBar, getUserInfo, cleanupFile, escapeHtml } = require('../../../utils/helpers');
+const { getFileForTelegram, sanitizeFilename, renderProgressBar, getUserInfo, cleanupFile, escapeHtml } = require('../../../utils/helpers');
 const { getSenderInfo } = require('../common/telegram-sender');
 const { downloadLimiter } = require('../../../middleware/rate-limit.middleware');
 const config = require('../../../config');
@@ -108,8 +108,9 @@ class SpotifyStrategy extends BaseStrategy {
             audioOpts.thumbnail = getFileForTelegram(result.thumbnailPath);
           }
 
+          const displayName = `${result.artist} - ${result.title}.mp3`;
           const sentAudio = await ctx.replyWithAudio(
-            getFileForTelegram(result.audioPath),
+            getFileForTelegram(result.audioPath, sanitizeFilename(displayName)),
             audioOpts
           );
 
@@ -530,9 +531,10 @@ class SpotifyStrategy extends BaseStrategy {
               }
 
               try {
+                const playlistDisplayName = `${result.artist} - ${result.title}.mp3`;
                 const audioPayload = outcome.cached && result.cachedFileId
                   ? result.cachedFileId
-                  : getFileForTelegram(result.audioPath);
+                  : getFileForTelegram(result.audioPath, sanitizeFilename(playlistDisplayName));
 
                 sent = await ctx.telegram.callApi('sendAudio', {
                   chat_id: ctx.chat.id,

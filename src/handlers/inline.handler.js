@@ -7,7 +7,7 @@ const videoService = require('../services/video.service');
 const cacheService = require('../services/cache.service');
 const config = require('../config');
 const logger = require('../utils/logger');
-const { getFileForTelegram, cleanupFile, escapeHtml, getUserInfo, formatCount } = require('../utils/helpers');
+const { getFileForTelegram, sanitizeFilename, cleanupFile, escapeHtml, getUserInfo, formatCount } = require('../utils/helpers');
 
 /**
  * Handle incoming Telegram inline queries (@bot <query>).
@@ -62,9 +62,12 @@ function getStagingChatTargets(ctx) {
  */
 async function uploadAudioStaging(ctx, audioPath, opts) {
   const targets = getStagingChatTargets(ctx);
+  const displayFilename = (opts?.title && opts?.performer)
+    ? `${opts.performer} - ${opts.title}.mp3`
+    : (opts?.title ? `${opts.title}.mp3` : null);
   for (const chatId of targets) {
     try {
-      const sent = await ctx.telegram.sendAudio(chatId, getFileForTelegram(audioPath), {
+      const sent = await ctx.telegram.sendAudio(chatId, getFileForTelegram(audioPath, displayFilename ? sanitizeFilename(displayFilename) : undefined), {
         ...opts,
         disable_notification: true
       });

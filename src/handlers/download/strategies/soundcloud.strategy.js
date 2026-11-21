@@ -7,7 +7,7 @@ const { tryServeFromCache, cacheSentMedia } = require('../common/cache-helper');
 const logger = require('../../../utils/logger');
 const {
   getFileForTelegram,
-  sanitizeFilename,
+  getAudioFileForTelegram,
   renderProgressBar,
   getUserInfo,
   cleanupFile,
@@ -117,9 +117,8 @@ class SoundCloudStrategy extends BaseStrategy {
           audioOpts.thumbnail = getFileForTelegram(result.thumbnailPath);
         }
 
-        const scDisplayName = `${result.artist} - ${result.title}.mp3`;
         const sentAudio = await ctx.replyWithAudio(
-          getFileForTelegram(result.audioPath, sanitizeFilename(scDisplayName)),
+          getAudioFileForTelegram(result.audioPath, result.artist, result.title),
           audioOpts
         );
 
@@ -514,9 +513,8 @@ class SoundCloudStrategy extends BaseStrategy {
                   audioOpts.thumbnail = getFileForTelegram(item.prepResult.thumbnailPath);
                 }
 
-                const scPlDisplayName = `${item.prepResult.artist} - ${item.prepResult.title}.mp3`;
                 sentAudio = await ctx.replyWithAudio(
-                  getFileForTelegram(item.prepResult.audioPath, sanitizeFilename(scPlDisplayName)),
+                  getAudioFileForTelegram(item.prepResult.audioPath, item.prepResult.artist, item.prepResult.title),
                   audioOpts
                 );
 

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 const soundcloudService = require('../src/services/soundcloud.service');
 const SoundCloudStrategy = require('../src/handlers/download/strategies/soundcloud.strategy');
-const { isValidVideoUrl } = require('../src/utils/helpers');
+const { isValidVideoUrl, buildAudioDisplayName } = require('../src/utils/helpers');
 
 describe('SoundCloud Service & Strategy', () => {
   describe('SoundCloud URL validation & parsing', () => {
@@ -61,6 +61,14 @@ describe('SoundCloud Service & Strategy', () => {
   });
 
   describe('SoundCloud playlist metadata normalization', () => {
+    it('should build a normal Artist - Title MP3 filename', () => {
+      assert.equal(
+        buildAudioDisplayName('Feli[x] Duster', 'Metro City Bay Area'),
+        'Feli[x] Duster - Metro City Bay Area.mp3'
+      );
+      assert.equal(buildAudioDisplayName('Unknown Artist', 'Audio'), 'track.mp3');
+    });
+
     it('should prefer entry metadata and the highest-resolution artwork', () => {
       const track = soundcloudService.normalizePlaylistTrack({
         id: '123',

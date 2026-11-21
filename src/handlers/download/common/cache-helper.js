@@ -108,6 +108,10 @@ function cacheSentMedia(url, sentMessages, info = {}, meta = {}) {
       }
 
       if (fileId) {
+        const cacheInfo = {
+          ...info,
+          ...(fileType === 'audio' ? { _audioFilenameVersion: 2 } : {})
+        };
         cacheService.set(url, {
           fileId,
           fileType,
@@ -119,7 +123,7 @@ function cacheSentMedia(url, sentMessages, info = {}, meta = {}) {
           quality: info.quality,
           width: meta.width || (msg.video ? msg.video.width : undefined),
           height: meta.height || (msg.video ? msg.video.height : undefined),
-          captionInfo: info
+          captionInfo: cacheInfo
         });
       }
     }

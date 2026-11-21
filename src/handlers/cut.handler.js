@@ -6,7 +6,7 @@ const config = require('../config');
 const undoService = require('../services/undo.service');
 const { getTelegramFileLocalPath } = require('./download/common/local-storage');
 const logger = require('../utils/logger');
-const { cleanupFile, generateFilename, generateThumbnailFromVideo, getFileForTelegram, sanitizeFilename, getUserInfo, escapeHtml } = require('../utils/helpers');
+const { cleanupFile, generateFilename, generateThumbnailFromVideo, getFileForTelegram, getAudioFileForTelegram, getUserInfo, escapeHtml } = require('../utils/helpers');
 
 /**
  * Parse human timestamp format (HH:MM:SS, MM:SS, or SS) to float seconds.
@@ -162,8 +162,7 @@ async function handleCutCommand(ctx) {
     } else if (mediaType === 'audio') {
       const cutTitle = targetMedia.title ? `${targetMedia.title} (Cut)` : 'Audio Cut';
       const cutPerformer = targetMedia.performer || '';
-      const cutDisplayName = cutPerformer ? `${cutPerformer} - ${cutTitle}.mp3` : `${cutTitle}.mp3`;
-      sent = await ctx.replyWithAudio(getFileForTelegram(outputPath, sanitizeFilename(cutDisplayName)), {
+      sent = await ctx.replyWithAudio(getAudioFileForTelegram(outputPath, cutPerformer, cutTitle), {
         title: cutTitle,
         performer: targetMedia.performer || undefined,
         duration: duration || undefined,

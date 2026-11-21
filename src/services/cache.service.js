@@ -212,6 +212,17 @@ class CacheService {
       const hash = this.hashUrl(normalized);
       const row = this.stmtGet.get(hash, Date.now());
 
+      if (row?.file_type === 'audio') {
+        let cacheInfo = null;
+        if (row.caption_info) {
+          try { cacheInfo = JSON.parse(row.caption_info); } catch {}
+        }
+        if (cacheInfo?._audioFilenameVersion !== 2) {
+          this.stmtDelete.run(hash);
+          return null;
+        }
+      }
+
       if (row) {
         this.stmtHit.run(Date.now(), this.audioTtlMs, row.id);
         if (row.caption_info) {

@@ -440,6 +440,37 @@ function sanitizeFilename(name) {
 }
 
 /**
+ * Build a stable, Telegram-safe display filename for an audio file.
+ * @param {string} artist
+ * @param {string} title
+ * @returns {string}
+ */
+function buildAudioDisplayName(artist, title) {
+  const cleanArtist = typeof artist === 'string' ? artist.trim() : '';
+  const cleanTitle = typeof title === 'string' ? title.trim() : '';
+
+  if (cleanArtist && cleanArtist !== 'Unknown' && cleanArtist !== 'Unknown Artist' &&
+      cleanTitle && cleanTitle !== 'Unknown' && cleanTitle !== 'Audio') {
+    return sanitizeFilename(`${cleanArtist} - ${cleanTitle}.mp3`);
+  }
+  if (cleanTitle && cleanTitle !== 'Unknown' && cleanTitle !== 'Audio') {
+    return sanitizeFilename(`${cleanTitle}.mp3`);
+  }
+  return 'track.mp3';
+}
+
+/**
+ * Create a Telegram file reference for audio using a human-readable filename.
+ * @param {string} filePath
+ * @param {string} artist
+ * @param {string} title
+ * @returns {string|object}
+ */
+function getAudioFileForTelegram(filePath, artist, title) {
+  return getFileForTelegram(filePath, buildAudioDisplayName(artist, title));
+}
+
+/**
  * Prepare a file reference for the Telegram Bot API.
  * When a custom displayFilename is provided and the bot uses a local Bot API
  * server (file:// protocol), a symlink with the desired name is created so the
@@ -629,6 +660,8 @@ module.exports = {
   getUserInfo,
   getFileForTelegram,
   sanitizeFilename,
+  buildAudioDisplayName,
+  getAudioFileForTelegram,
   prepareThumbnail,
   sanitizePhotoForTelegram,
   generateThumbnailFromVideo,

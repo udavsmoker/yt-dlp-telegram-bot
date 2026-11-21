@@ -96,7 +96,8 @@ describe('CacheService (SQLite & URL Normalization)', () => {
         fileId: 'tg_audio_file_id_777',
         fileType: 'audio',
         title: 'Song Title',
-        author: 'Artist Name'
+        author: 'Artist Name',
+        captionInfo: { _audioFilenameVersion: 2 }
       });
 
       const entry = cache.get(url);

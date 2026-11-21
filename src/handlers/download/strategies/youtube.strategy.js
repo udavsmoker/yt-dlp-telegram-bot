@@ -3,7 +3,7 @@ const videoService = require('../../../services/video.service');
 const audioService = require('../../../services/audio.service');
 const queueService = require('../../../services/queue.service');
 const logger = require('../../../utils/logger');
-const { isYouTubeUrl, getUserInfo, cleanupFile, getFileForTelegram, sanitizeFilename, renderProgressBar } = require('../../../utils/helpers');
+const { isYouTubeUrl, getUserInfo, cleanupFile, getFileForTelegram, getAudioFileForTelegram, renderProgressBar } = require('../../../utils/helpers');
 const { getSenderInfo, buildCaption, sendMediaToTelegram, cleanupMessages } = require('../common/telegram-sender');
 const { tryServeFromCache, cacheSentMedia } = require('../common/cache-helper');
 const { registerPendingAudioExtract } = require('../audio/audio-extractor');
@@ -323,9 +323,8 @@ class YouTubeStrategy extends BaseStrategy {
 
           const ytAudioTitle = result.info?.title || audioResult.title || 'Audio';
           const ytAudioArtist = result.info?.author || audioResult.artist || 'Unknown';
-          const ytDisplayName = `${ytAudioArtist} - ${ytAudioTitle}.mp3`;
           const sentAudio = await ctx.replyWithAudio(
-            getFileForTelegram(audioResult.audioPath, sanitizeFilename(ytDisplayName)),
+            getAudioFileForTelegram(audioResult.audioPath, ytAudioArtist, ytAudioTitle),
             audioOptions
           );
 

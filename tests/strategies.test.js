@@ -8,7 +8,7 @@ const TikTokStrategy = require('../src/handlers/download/strategies/tiktok.strat
 const BlueskyStrategy = require('../src/handlers/download/strategies/bluesky.strategy');
 const SoundCloudStrategy = require('../src/handlers/download/strategies/soundcloud.strategy');
 const GenericStrategy = require('../src/handlers/download/strategies/generic.strategy');
-const { getSenderInfo, buildCaption, truncateTitle } = require('../src/handlers/download/common/telegram-sender');
+const { getSenderInfo, buildCaption, truncateTitle, partitionMediaItems, sendMediaToTelegram } = require('../src/handlers/download/common/telegram-sender');
 
 describe('Download Strategies & Telegram Sender', () => {
   describe('Strategy routing (canHandle)', () => {
@@ -171,6 +171,52 @@ describe('Download Strategies & Telegram Sender', () => {
       const caption = buildCaption(sender, url, info);
       assert.ok(caption.includes('Tom &amp; Jerry &lt;fun&gt;'));
       assert.ok(caption.includes('&lt;hacker&gt; &amp; co'));
+    });
+
+    it('should partition media items into balanced albums of 2-10 items', () => {
+      // 1 item -> 1 batch of 1
+      assert.deepEqual(partitionMediaItems([1]), [[1]]);
+      // 10 items -> 1 batch of 10
+      assert.equal(partitionMediaItems(Array.from({ length: 10 }, (_, i) => i)).length, 1);
+      // 11 items -> 2 batches: [6, 5] (never 10 + 1)
+      const b11 = partitionMediaItems(Array.from({ length: 11 }, (_, i) => i));
+      assert.equal(b11.length, 2);
+      assert.equal(b11[0].length, 6);
+      assert.equal(b11[1].length, 5);
+      // 21 items -> 3 batches: [7, 7, 7]
+      const b21 = partitionMediaItems(Array.from({ length: 21 }, (_, i) => i));
+      assert.equal(b21.length, 3);
+      assert.deepEqual(b21.map(b => b.length), [7, 7, 7]);
+    });
+
+    it('should deliver media group and recover from image process failures without individual spam', async () => {
+      let callCount = 0;
+      const sentGroups = [];
+      const mockCtx = {
+        chat: { id: 123 },
+        from: { id: 456 },
+        replyWithMediaGroup: async (group) => {
+          callCount++;
+          if (callCount === 1) {
+            // First attempt fails with IMAGE_PROCESS_FAILED on item 2
+            const err = new Error('Bad Request: failed to send message #2 with the error message "IMAGE_PROCESS_FAILED"');
+            err.description = 'failed to send message #2 with the error message "IMAGE_PROCESS_FAILED"';
+            throw err;
+          }
+          sentGroups.push(group);
+          return group.map((_, i) => ({ message_id: 100 + i }));
+        }
+      };
+
+      const mediaItems = [
+        { type: 'photo', path: '/fake/1.jpg' },
+        { type: 'photo', path: '/fake/2.jpg' },
+        { type: 'photo', path: '/fake/3.jpg' }
+      ];
+
+      const res = await sendMediaToTelegram(mockCtx, mediaItems, 'caption');
+      assert.ok(res.length >= 2, 'Should send media items as group');
+      assert.equal(sentGroups.length, 1, 'Should send via media group');
     });
   });
 });

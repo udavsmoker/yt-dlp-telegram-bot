@@ -577,24 +577,27 @@ class TikTokService {
         try {
           await fs.writeFile(imagePath, downloadedBuffer);
 
-          // Sanitize image using FFmpeg to baseline standard JPEG (prevents Telegram IMAGE_PROCESS_FAILED)
+          // Sanitize image using FFmpeg to standard baseline JPEG with yuv420p
+          // This guarantees Telegram Bot API (stb_image / libjpeg) compatibility and prevents IMAGE_PROCESS_FAILED
           const sanitizedPath = imagePath.replace('.jpg', '_clean.jpg');
           try {
             await execFile('ffmpeg', [
               '-y',
               '-i', imagePath,
+              '-vf', 'format=yuv420p',
               '-frames:v', '1',
               '-q:v', '2',
               sanitizedPath
             ], { timeout: 10000, signal });
             await fs.unlink(imagePath);
             await fs.rename(sanitizedPath, imagePath);
-          } catch {
+            imagePaths.push(imagePath);
+            logger.info(`Downloaded and validated image ${i + 1}/${images.length}`);
+          } catch (ffmpegErr) {
             try { await fs.unlink(sanitizedPath); } catch {}
+            try { await fs.unlink(imagePath); } catch {}
+            logger.warn(`Slide ${i + 1} failed image sanitization, skipping: ${ffmpegErr.message}`);
           }
-
-          imagePaths.push(imagePath);
-          logger.info(`Downloaded image ${i + 1}/${images.length}`);
         } catch (err) {
           if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
           logger.warn(`Failed to save image ${i + 1}: ${err.message}`);

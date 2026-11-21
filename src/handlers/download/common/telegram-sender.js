@@ -78,6 +78,26 @@ function buildCaption(sender, url, info = {}) {
 }
 
 /**
+ * Partition media items into balanced batches of at most 10 items.
+ * Guarantees every batch has 2-10 items when total > 1, avoiding single-item albums.
+ * @param {Array} mediaItems
+ * @returns {Array<Array>}
+ */
+function partitionMediaItems(mediaItems) {
+  const n = mediaItems.length;
+  if (n <= 10) return [mediaItems];
+  const numBatches = Math.ceil(n / 10);
+  const batches = [];
+  let startIndex = 0;
+  for (let i = 0; i < numBatches; i++) {
+    const batchSize = Math.floor(n / numBatches) + (i < (n % numBatches) ? 1 : 0);
+    batches.push(mediaItems.slice(startIndex, startIndex + batchSize));
+    startIndex += batchSize;
+  }
+  return batches;
+}
+
+/**
  * Send media items (photos and videos) to Telegram in batches of up to 10 items.
  * @param {object} ctx - Telegraf context
  * @param {Array<{type: 'photo'|'video', path: string, thumbnailPath?: string}>} mediaItems
@@ -86,27 +106,26 @@ function buildCaption(sender, url, info = {}) {
  * @returns {Promise<Array>} Sent Telegram message objects
  */
 async function sendMediaToTelegram(ctx, mediaItems, caption, videoMeta = {}) {
-  const TELEGRAM_MEDIA_LIMIT = 10;
-  const batches = [];
-  for (let i = 0; i < mediaItems.length; i += TELEGRAM_MEDIA_LIMIT) {
-    batches.push(mediaItems.slice(i, i + TELEGRAM_MEDIA_LIMIT));
-  }
-
+  const batches = partitionMediaItems(mediaItems);
   const sentMessages = [];
 
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
     const batch = batches[batchIndex];
     const isLastBatch = batchIndex === batches.length - 1;
 
-    if (batch.length === 1 && batches.length === 1) {
+    if (batch.length === 1) {
       const item = batch[0];
+      const singleCaption = isLastBatch ? caption : undefined;
       if (item.type === 'photo') {
-        const sent = await ctx.replyWithPhoto(getFileForTelegram(item.path), { caption, parse_mode: 'HTML' });
+        const sent = await ctx.replyWithPhoto(getFileForTelegram(item.path), {
+          caption: singleCaption,
+          parse_mode: singleCaption ? 'HTML' : undefined
+        });
         sentMessages.push(sent);
       } else {
         const opts = {
-          caption,
-          parse_mode: 'HTML',
+          caption: singleCaption,
+          parse_mode: singleCaption ? 'HTML' : undefined,
           supports_streaming: true,
           width: videoMeta.width,
           height: videoMeta.height,
@@ -117,39 +136,43 @@ async function sendMediaToTelegram(ctx, mediaItems, caption, videoMeta = {}) {
         sentMessages.push(sent);
       }
     } else {
-      const mediaGroup = batch.map((item, index) => ({
-        type: item.type,
-        media: getFileForTelegram(item.path),
-        caption: isLastBatch && index === 0 ? caption : undefined,
-        parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined,
-        thumbnail: item.thumbnailPath ? getFileForTelegram(item.thumbnailPath) : undefined,
-        ...(item.type === 'video' ? {
-          supports_streaming: true,
-          width: videoMeta.width,
-          height: videoMeta.height,
-          duration: videoMeta.duration
-        } : {})
-      }));
+      let currentBatch = [...batch];
+      const sendGroup = async (items) => {
+        const mediaGroup = items.map((item, index) => ({
+          type: item.type,
+          media: getFileForTelegram(item.path),
+          caption: isLastBatch && index === 0 ? caption : undefined,
+          parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined,
+          thumbnail: item.thumbnailPath ? getFileForTelegram(item.thumbnailPath) : undefined,
+          ...(item.type === 'video' ? {
+            supports_streaming: true,
+            width: videoMeta.width,
+            height: videoMeta.height,
+            duration: videoMeta.duration
+          } : {})
+        }));
+        return ctx.replyWithMediaGroup(mediaGroup);
+      };
 
       try {
-        const sent = await ctx.replyWithMediaGroup(mediaGroup);
+        const sent = await sendGroup(currentBatch);
         if (Array.isArray(sent)) sentMessages.push(...sent);
       } catch (sendError) {
         if (sendError.message?.includes('caption is too long') || sendError.description?.includes('caption is too long')) {
           logger.warn(`Caption too long for batch ${batchIndex + 1}, retrying without caption`);
-          const fallbackGroup = batch.map(item => ({
+          const fallbackGroup = currentBatch.map(item => ({
             type: item.type,
             media: getFileForTelegram(item.path)
           }));
           const sent = await ctx.replyWithMediaGroup(fallbackGroup);
           if (Array.isArray(sent)) sentMessages.push(...sent);
         } else if (sendError.message?.includes('IMAGE_PROCESS_FAILED') || sendError.description?.includes('IMAGE_PROCESS_FAILED')) {
-          logger.warn(`IMAGE_PROCESS_FAILED in batch ${batchIndex + 1}, re-encoding photos with ffmpeg to baseline JPEG...`);
-          for (const item of batch) {
+          logger.warn(`IMAGE_PROCESS_FAILED in batch ${batchIndex + 1}, re-encoding photos with ffmpeg to standard baseline JPEG...`);
+          for (const item of currentBatch) {
             if (item.type === 'photo') {
               const cleanPath = item.path + '.clean.jpg';
               try {
-                await execFile('ffmpeg', ['-y', '-i', item.path, '-frames:v', '1', '-q:v', '2', cleanPath], { timeout: 10000 });
+                await execFile('ffmpeg', ['-y', '-i', item.path, '-vf', 'format=yuv420p', '-frames:v', '1', '-q:v', '2', cleanPath], { timeout: 10000 });
                 await fs.unlink(item.path);
                 await fs.rename(cleanPath, item.path);
               } catch {
@@ -158,30 +181,25 @@ async function sendMediaToTelegram(ctx, mediaItems, caption, videoMeta = {}) {
             }
           }
           try {
-            const retryGroup = batch.map((item, index) => ({
-              type: item.type,
-              media: getFileForTelegram(item.path),
-              caption: isLastBatch && index === 0 ? caption : undefined,
-              parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined
-            }));
-            const sent = await ctx.replyWithMediaGroup(retryGroup);
+            const sent = await sendGroup(currentBatch);
             if (Array.isArray(sent)) sentMessages.push(...sent);
           } catch (retryErr) {
-            logger.warn(`MediaGroup retry failed after re-encoding (${retryErr.message}), sending photos individually`);
-            for (let idx = 0; idx < batch.length; idx++) {
-              const item = batch[idx];
+            logger.warn(`MediaGroup retry failed after re-encoding (${retryErr.message}), recovering album`);
+            const errText = retryErr.description || retryErr.message || '';
+            const match = errText.match(/failed to send message #(\d+)/i);
+            if (match && currentBatch.length > 2) {
+              const failedIdx = parseInt(match[1], 10) - 1;
+              logger.warn(`Excluding problematic photo #${failedIdx + 1} from album and retrying media group`);
+              currentBatch.splice(failedIdx, 1);
               try {
-                const singleCaption = (isLastBatch && idx === batch.length - 1) ? caption : undefined;
-                if (item.type === 'photo') {
-                  const sent = await ctx.replyWithPhoto(getFileForTelegram(item.path), {
-                    caption: singleCaption,
-                    parse_mode: singleCaption ? 'HTML' : undefined
-                  });
-                  sentMessages.push(sent);
-                }
-              } catch (singleErr) {
-                logger.error(`Failed to send individual photo ${idx + 1}: ${singleErr.message}`);
+                const sent = await sendGroup(currentBatch);
+                if (Array.isArray(sent)) sentMessages.push(...sent);
+              } catch (finalGroupErr) {
+                logger.error(`Media group recovery failed: ${finalGroupErr.message}`);
+                throw finalGroupErr;
               }
+            } else {
+              throw retryErr;
             }
           }
         } else {
@@ -223,6 +241,7 @@ module.exports = {
   getSenderInfo,
   truncateTitle,
   buildCaption,
+  partitionMediaItems,
   sendMediaToTelegram,
   cleanupMessages
 };

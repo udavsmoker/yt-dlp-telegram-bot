@@ -316,6 +316,59 @@ async function prepareThumbnail(inputPath, outputPath = null) {
 }
 
 /**
+ * Sanitize a photo for Telegram, ensuring standard sRGB baseline non-progressive JPEG
+ * and stripping any non-standard ICC profiles or metadata that cause Telegram IMAGE_PROCESS_FAILED.
+ * @param {string} inputPath - Path to input image file
+ * @param {string} [outputPath] - Optional output path (defaults to overwriting inputPath)
+ * @returns {Promise<string>} Path to sanitized image file
+ */
+async function sanitizePhotoForTelegram(inputPath, outputPath = null) {
+  const targetPath = outputPath || inputPath;
+  const tempPath = targetPath + '.clean.jpg';
+  const logger = require('./logger');
+
+  // Try ImageMagick first (strips ICC profiles and enforces non-interlaced baseline JPEG)
+  try {
+    await execFile('magick', [
+      inputPath,
+      '-colorspace', 'sRGB',
+      '-strip',
+      '-interlace', 'none',
+      '-quality', '95',
+      tempPath
+    ], { timeout: 15000 });
+
+    await fs.unlink(targetPath).catch(() => {});
+    await fs.rename(tempPath, targetPath);
+    return targetPath;
+  } catch (magickErr) {
+    try { await fs.unlink(tempPath); } catch {}
+  }
+
+  // Fallback to ffmpeg
+  try {
+    await execFile('ffmpeg', [
+      '-y',
+      '-i', inputPath,
+      '-vf', 'format=yuv420p',
+      '-map_metadata', '-1',
+      '-bitexact',
+      '-frames:v', '1',
+      '-q:v', '2',
+      tempPath
+    ], { timeout: 15000 });
+
+    await fs.unlink(targetPath).catch(() => {});
+    await fs.rename(tempPath, targetPath);
+    return targetPath;
+  } catch (ffmpegErr) {
+    try { await fs.unlink(tempPath); } catch {}
+    logger.warn(`Failed to sanitize photo ${path.basename(inputPath)}: ${ffmpegErr.message}`);
+    throw ffmpegErr;
+  }
+}
+
+/**
  * Generate a thumbnail from a video file, meeting Telegram requirements.
  * Uses ffmpeg thumbnail filter to select the most representative frame.
  * 
@@ -577,6 +630,7 @@ module.exports = {
   getFileForTelegram,
   sanitizeFilename,
   prepareThumbnail,
+  sanitizePhotoForTelegram,
   generateThumbnailFromVideo,
   isValidVideoUrl,
   isTikTokPhotoUrl,

@@ -1,4 +1,4 @@
-const { getFileForTelegram, escapeHtml } = require('../../../utils/helpers');
+const { getFileForTelegram, escapeHtml, sanitizePhotoForTelegram } = require('../../../utils/helpers');
 const logger = require('../../../utils/logger');
 const { promisify } = require('util');
 const execFile = promisify(require('child_process').execFile);
@@ -117,6 +117,7 @@ async function sendMediaToTelegram(ctx, mediaItems, caption, videoMeta = {}) {
       const item = batch[0];
       const singleCaption = isLastBatch ? caption : undefined;
       if (item.type === 'photo') {
+        try { await sanitizePhotoForTelegram(item.path); } catch {}
         const sent = await ctx.replyWithPhoto(getFileForTelegram(item.path), {
           caption: singleCaption,
           parse_mode: singleCaption ? 'HTML' : undefined
@@ -137,6 +138,13 @@ async function sendMediaToTelegram(ctx, mediaItems, caption, videoMeta = {}) {
       }
     } else {
       let currentBatch = [...batch];
+      // Sanitize all photos in batch before sending to prevent IMAGE_PROCESS_FAILED
+      for (const item of currentBatch) {
+        if (item.type === 'photo') {
+          try { await sanitizePhotoForTelegram(item.path); } catch {}
+        }
+      }
+
       const sendGroup = async (items) => {
         const mediaGroup = items.map((item, index) => ({
           type: item.type,
@@ -154,56 +162,47 @@ async function sendMediaToTelegram(ctx, mediaItems, caption, videoMeta = {}) {
         return ctx.replyWithMediaGroup(mediaGroup);
       };
 
-      try {
-        const sent = await sendGroup(currentBatch);
-        if (Array.isArray(sent)) sentMessages.push(...sent);
-      } catch (sendError) {
-        if (sendError.message?.includes('caption is too long') || sendError.description?.includes('caption is too long')) {
-          logger.warn(`Caption too long for batch ${batchIndex + 1}, retrying without caption`);
-          const fallbackGroup = currentBatch.map(item => ({
-            type: item.type,
-            media: getFileForTelegram(item.path)
-          }));
-          const sent = await ctx.replyWithMediaGroup(fallbackGroup);
+      let sentGroup = false;
+      let attempts = 0;
+      while (!sentGroup && attempts < 5 && currentBatch.length >= 2) {
+        try {
+          const sent = await sendGroup(currentBatch);
           if (Array.isArray(sent)) sentMessages.push(...sent);
-        } else if (sendError.message?.includes('IMAGE_PROCESS_FAILED') || sendError.description?.includes('IMAGE_PROCESS_FAILED')) {
-          logger.warn(`IMAGE_PROCESS_FAILED in batch ${batchIndex + 1}, re-encoding photos with ffmpeg to standard baseline JPEG...`);
-          for (const item of currentBatch) {
-            if (item.type === 'photo') {
-              const cleanPath = item.path + '.clean.jpg';
-              try {
-                await execFile('ffmpeg', ['-y', '-i', item.path, '-vf', 'format=yuv420p', '-frames:v', '1', '-q:v', '2', cleanPath], { timeout: 10000 });
-                await fs.unlink(item.path);
-                await fs.rename(cleanPath, item.path);
-              } catch {
-                try { await fs.unlink(cleanPath); } catch {}
-              }
-            }
-          }
-          try {
-            const sent = await sendGroup(currentBatch);
+          sentGroup = true;
+        } catch (sendError) {
+          attempts++;
+          const errText = sendError.description || sendError.response?.data?.description || sendError.response?.description || sendError.message || '';
+          if (errText.includes('caption is too long')) {
+            logger.warn(`Caption too long for batch ${batchIndex + 1}, retrying without caption`);
+            const fallbackGroup = currentBatch.map(item => ({
+              type: item.type,
+              media: getFileForTelegram(item.path)
+            }));
+            const sent = await ctx.replyWithMediaGroup(fallbackGroup);
             if (Array.isArray(sent)) sentMessages.push(...sent);
-          } catch (retryErr) {
-            logger.warn(`MediaGroup retry failed after re-encoding (${retryErr.message}), recovering album`);
-            const errText = retryErr.description || retryErr.message || '';
-            const match = errText.match(/failed to send message #(\d+)/i);
-            if (match && currentBatch.length > 2) {
-              const failedIdx = parseInt(match[1], 10) - 1;
-              logger.warn(`Excluding problematic photo #${failedIdx + 1} from album and retrying media group`);
+            sentGroup = true;
+          } else if (errText.includes('IMAGE_PROCESS_FAILED') || errText.includes('IMAGE PROCESS FAILED')) {
+            const match = errText.match(/failed to send message\s*#?(\d+)/i);
+            const failedIdx = match ? parseInt(match[1], 10) - 1 : currentBatch.length - 1;
+            logger.warn(`IMAGE_PROCESS_FAILED on photo #${failedIdx + 1} (attempt ${attempts}), excluding from album`);
+            if (failedIdx >= 0 && failedIdx < currentBatch.length) {
               currentBatch.splice(failedIdx, 1);
-              try {
-                const sent = await sendGroup(currentBatch);
-                if (Array.isArray(sent)) sentMessages.push(...sent);
-              } catch (finalGroupErr) {
-                logger.error(`Media group recovery failed: ${finalGroupErr.message}`);
-                throw finalGroupErr;
-              }
-            } else {
-              throw retryErr;
             }
+            if (currentBatch.length === 1) {
+              const singleItem = currentBatch[0];
+              const singleCaption = isLastBatch ? caption : undefined;
+              if (singleItem.type === 'photo') {
+                const sent = await ctx.replyWithPhoto(getFileForTelegram(singleItem.path), {
+                  caption: singleCaption,
+                  parse_mode: singleCaption ? 'HTML' : undefined
+                });
+                sentMessages.push(sent);
+              }
+              sentGroup = true;
+            }
+          } else {
+            throw sendError;
           }
-        } else {
-          throw sendError;
         }
       }
     }

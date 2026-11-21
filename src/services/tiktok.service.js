@@ -523,33 +523,84 @@ class TikTokService {
     const imagePaths = [];
     for (let i = 0; i < images.length; i++) {
       if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
-      const imageUrl = typeof images[i] === 'string' ? images[i] : images[i]?.url;
+      const rawUrl = typeof images[i] === 'string' ? images[i] : images[i]?.url;
       
-      if (!imageUrl) {
+      if (!rawUrl) {
         logger.warn(`No URL for image ${i + 1}, skipping`);
         continue;
+      }
+
+      // Check if fastdl.muscdn.app proxy is used; decode direct TikTok CDN URL from base64
+      let targetUrls = [rawUrl];
+      if (rawUrl.includes('fastdl.muscdn.app/a/images/')) {
+        try {
+          const b64 = rawUrl.split('/a/images/')[1].split('?')[0];
+          const decoded = Buffer.from(b64, 'base64').toString('utf8');
+          if (decoded && decoded.startsWith('http')) {
+            // Put decoded direct CDN URL first, proxy URL as fallback
+            targetUrls = [decoded, rawUrl];
+          }
+        } catch {}
       }
       
       const imageFilename = generateFilename(`tiktok_slide_${i}`, 'jpg');
       const imagePath = path.join(config.download.tempDir, imageFilename);
 
-      try {
-        const imageResponse = await axios.get(imageUrl, {
-          responseType: 'arraybuffer',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Referer': 'https://www.tiktok.com/'
-          },
-          signal,
-          timeout: 30000
-        });
+      let downloadedBuffer = null;
+      for (const targetUrl of targetUrls) {
+        try {
+          const imageResponse = await axios.get(targetUrl, {
+            responseType: 'arraybuffer',
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Referer': 'https://www.tiktok.com/'
+            },
+            signal,
+            timeout: 15000
+          });
 
-        await fs.writeFile(imagePath, imageResponse.data);
-        imagePaths.push(imagePath);
-        logger.info(`Downloaded image ${i + 1}/${images.length}`);
-      } catch (error) {
-        if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
-        logger.warn(`Failed to download image ${i + 1}: ${error.message}`);
+          const buf = imageResponse.data;
+          if (buf && buf.length > 1000) {
+            const isHtml = buf.slice(0, 50).toString().includes('<html') || buf.slice(0, 50).toString().includes('<!DOC');
+            if (!isHtml) {
+              downloadedBuffer = buf;
+              break;
+            }
+          }
+        } catch (targetErr) {
+          if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
+          logger.warn(`Failed downloading slide from ${targetUrl.substring(0, 60)}: ${targetErr.message}`);
+        }
+      }
+
+      if (downloadedBuffer) {
+        try {
+          await fs.writeFile(imagePath, downloadedBuffer);
+
+          // Sanitize image using FFmpeg to baseline standard JPEG (prevents Telegram IMAGE_PROCESS_FAILED)
+          const sanitizedPath = imagePath.replace('.jpg', '_clean.jpg');
+          try {
+            await execFile('ffmpeg', [
+              '-y',
+              '-i', imagePath,
+              '-frames:v', '1',
+              '-q:v', '2',
+              sanitizedPath
+            ], { timeout: 10000, signal });
+            await fs.unlink(imagePath);
+            await fs.rename(sanitizedPath, imagePath);
+          } catch {
+            try { await fs.unlink(sanitizedPath); } catch {}
+          }
+
+          imagePaths.push(imagePath);
+          logger.info(`Downloaded image ${i + 1}/${images.length}`);
+        } catch (err) {
+          if (signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
+          logger.warn(`Failed to save image ${i + 1}: ${err.message}`);
+        }
+      } else {
+        logger.warn(`Could not download valid image for slide ${i + 1}`);
       }
     }
 

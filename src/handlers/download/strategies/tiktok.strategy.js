@@ -53,59 +53,6 @@ class TikTokStrategy extends BaseStrategy {
           try {
             result = await videoService.downloadTikTokSlideshow(url, { signal }, onProgress);
             progressReporter.stop();
-
-            if (result.type === 'video') {
-              filePath = result.filePath;
-              thumbnailPath = result.thumbnailPath;
-              if (filePath) filesToCleanup.push(filePath);
-              if (thumbnailPath) filesToCleanup.push(thumbnailPath);
-
-              logger.info('TikTok video downloaded via API');
-
-              await ctx.telegram.editMessageText(
-                ctx.chat.id,
-                statusMessage.message_id,
-                null,
-                '📤 Uploading to Telegram...'
-              );
-
-              const sender = getSenderInfo(ctx);
-              const caption = buildCaption(sender, url, result.info);
-
-              const sent = await sendMediaToTelegram(
-                ctx,
-                [{ type: 'video', path: result.filePath, thumbnailPath: thumbnailPath || undefined }],
-                caption,
-                { width: result.width, height: result.height, duration: result.duration }
-              );
-              cacheSentMedia(url, sent, result.info, result);
-
-              await cleanupMessages(ctx, statusMessage.message_id, originalMessageId);
-              logger.info(`TikTok video (via API) sent successfully to ${userInfo}`);
-              return;
-            }
-
-            if (result.type === 'slideshow' || result.type === 'image') {
-              if (result.imagePaths) filesToCleanup.push(...result.imagePaths);
-
-              logger.info(`TikTok slideshow downloaded: ${(result.imagePaths || []).length} images`);
-
-              await ctx.telegram.editMessageText(
-                ctx.chat.id,
-                statusMessage.message_id,
-                null,
-                '📤 Uploading photos to Telegram...'
-              );
-
-              const sender = getSenderInfo(ctx);
-              const caption = buildCaption(sender, url, result.info);
-              const mediaItems = (result.imagePaths || []).map(p => ({ type: 'photo', path: p }));
-
-              await sendMediaToTelegram(ctx, mediaItems, caption);
-              await cleanupMessages(ctx, statusMessage.message_id, originalMessageId);
-              logger.info(`TikTok slideshow sent successfully to ${userInfo}`);
-              return;
-            }
           } catch (apiError) {
             logger.info(`TikTok API failed, trying yt-dlp fallback: ${apiError.message}`);
 
@@ -115,61 +62,68 @@ class TikTokStrategy extends BaseStrategy {
             filePath = null;
             thumbnailPath = null;
 
-            try {
-              await ctx.telegram.editMessageText(
-                ctx.chat.id,
-                statusMessage.message_id,
-                null,
-                '⬇️ Trying fallback download method...'
-              );
+            await ctx.telegram.editMessageText(
+              ctx.chat.id,
+              statusMessage.message_id,
+              null,
+              '⬇️ Trying fallback download method...'
+            );
 
-              const fbResult = await videoService.download(url, { signal }, onProgress);
-              progressReporter.stop();
+            result = await videoService.download(url, { signal }, onProgress);
+            progressReporter.stop();
+          }
 
-              if (fbResult.type === 'slideshow' || fbResult.type === 'image') {
-                if (fbResult.imagePaths) filesToCleanup.push(...fbResult.imagePaths);
-                const sender = getSenderInfo(ctx);
-                const caption = buildCaption(sender, url, fbResult.info || {});
-                const mediaItems = (fbResult.imagePaths || []).map(p => ({ type: 'photo', path: p }));
+          if (result.type === 'video') {
+            filePath = result.filePath;
+            thumbnailPath = result.thumbnailPath;
+            if (filePath) filesToCleanup.push(filePath);
+            if (thumbnailPath) filesToCleanup.push(thumbnailPath);
 
-                await sendMediaToTelegram(ctx, mediaItems, caption);
-                await cleanupMessages(ctx, statusMessage.message_id, originalMessageId);
-                logger.info(`TikTok slideshow (via yt-dlp) sent successfully to ${userInfo}`);
-                return;
-              }
+            logger.info('TikTok video ready to send');
 
-              filePath = fbResult.filePath;
-              thumbnailPath = fbResult.thumbnailPath;
-              if (filePath) filesToCleanup.push(filePath);
-              if (thumbnailPath) filesToCleanup.push(thumbnailPath);
+            await ctx.telegram.editMessageText(
+              ctx.chat.id,
+              statusMessage.message_id,
+              null,
+              '📤 Uploading to Telegram...'
+            );
 
-              logger.info('TikTok video downloaded via yt-dlp fallback');
+            const sender = getSenderInfo(ctx);
+            const caption = buildCaption(sender, url, result.info);
 
-              await ctx.telegram.editMessageText(
-                ctx.chat.id,
-                statusMessage.message_id,
-                null,
-                '📤 Uploading to Telegram...'
-              );
+            const sent = await sendMediaToTelegram(
+              ctx,
+              [{ type: 'video', path: result.filePath, thumbnailPath: thumbnailPath || undefined }],
+              caption,
+              { width: result.width, height: result.height, duration: result.duration }
+            );
+            cacheSentMedia(url, sent, result.info, result);
 
-              const sender = getSenderInfo(ctx);
-              const caption = buildCaption(sender, url, fbResult.info);
+            await cleanupMessages(ctx, statusMessage.message_id, originalMessageId);
+            logger.info(`TikTok video sent successfully to ${userInfo}`);
+            return;
+          }
 
-              const sent = await sendMediaToTelegram(
-                ctx,
-                [{ type: 'video', path: fbResult.filePath, thumbnailPath: thumbnailPath || undefined }],
-                caption,
-                { width: fbResult.width, height: fbResult.height, duration: fbResult.duration }
-              );
-              cacheSentMedia(url, sent, fbResult.info, fbResult);
+          if (result.type === 'slideshow' || result.type === 'image') {
+            if (result.imagePaths) filesToCleanup.push(...result.imagePaths);
 
-              await cleanupMessages(ctx, statusMessage.message_id, originalMessageId);
-              logger.info(`TikTok video (via yt-dlp) sent successfully to ${userInfo}`);
-              return;
-            } catch (ytdlpError) {
-              logger.error('Both TikTok API and yt-dlp failed');
-              throw apiError;
-            }
+            logger.info(`TikTok slideshow ready: ${(result.imagePaths || []).length} images`);
+
+            await ctx.telegram.editMessageText(
+              ctx.chat.id,
+              statusMessage.message_id,
+              null,
+              '📤 Uploading photos to Telegram...'
+            );
+
+            const sender = getSenderInfo(ctx);
+            const caption = buildCaption(sender, url, result.info || {});
+            const mediaItems = (result.imagePaths || []).map(p => ({ type: 'photo', path: p }));
+
+            await sendMediaToTelegram(ctx, mediaItems, caption);
+            await cleanupMessages(ctx, statusMessage.message_id, originalMessageId);
+            logger.info(`TikTok slideshow sent successfully to ${userInfo}`);
+            return;
           }
         } finally {
           progressReporter.stop();

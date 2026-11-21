@@ -1,5 +1,8 @@
 const { getFileForTelegram, escapeHtml } = require('../../../utils/helpers');
 const logger = require('../../../utils/logger');
+const { promisify } = require('util');
+const execFile = promisify(require('child_process').execFile);
+const fs = require('fs').promises;
 
 /**
  * Extract sender name and HTML mention link for user or channel.
@@ -140,6 +143,47 @@ async function sendMediaToTelegram(ctx, mediaItems, caption, videoMeta = {}) {
           }));
           const sent = await ctx.replyWithMediaGroup(fallbackGroup);
           if (Array.isArray(sent)) sentMessages.push(...sent);
+        } else if (sendError.message?.includes('IMAGE_PROCESS_FAILED') || sendError.description?.includes('IMAGE_PROCESS_FAILED')) {
+          logger.warn(`IMAGE_PROCESS_FAILED in batch ${batchIndex + 1}, re-encoding photos with ffmpeg to baseline JPEG...`);
+          for (const item of batch) {
+            if (item.type === 'photo') {
+              const cleanPath = item.path + '.clean.jpg';
+              try {
+                await execFile('ffmpeg', ['-y', '-i', item.path, '-frames:v', '1', '-q:v', '2', cleanPath], { timeout: 10000 });
+                await fs.unlink(item.path);
+                await fs.rename(cleanPath, item.path);
+              } catch {
+                try { await fs.unlink(cleanPath); } catch {}
+              }
+            }
+          }
+          try {
+            const retryGroup = batch.map((item, index) => ({
+              type: item.type,
+              media: getFileForTelegram(item.path),
+              caption: isLastBatch && index === 0 ? caption : undefined,
+              parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined
+            }));
+            const sent = await ctx.replyWithMediaGroup(retryGroup);
+            if (Array.isArray(sent)) sentMessages.push(...sent);
+          } catch (retryErr) {
+            logger.warn(`MediaGroup retry failed after re-encoding (${retryErr.message}), sending photos individually`);
+            for (let idx = 0; idx < batch.length; idx++) {
+              const item = batch[idx];
+              try {
+                const singleCaption = (isLastBatch && idx === batch.length - 1) ? caption : undefined;
+                if (item.type === 'photo') {
+                  const sent = await ctx.replyWithPhoto(getFileForTelegram(item.path), {
+                    caption: singleCaption,
+                    parse_mode: singleCaption ? 'HTML' : undefined
+                  });
+                  sentMessages.push(sent);
+                }
+              } catch (singleErr) {
+                logger.error(`Failed to send individual photo ${idx + 1}: ${singleErr.message}`);
+              }
+            }
+          }
         } else {
           throw sendError;
         }

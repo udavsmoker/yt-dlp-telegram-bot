@@ -189,20 +189,12 @@ describe('Download Strategies & Telegram Sender', () => {
       assert.deepEqual(b21.map(b => b.length), [7, 7, 7]);
     });
 
-    it('should deliver media group and recover from image process failures without individual spam', async () => {
-      let callCount = 0;
+    it('should use multipart upload (not file://) for photo items in media groups', async () => {
       const sentGroups = [];
       const mockCtx = {
         chat: { id: 123 },
         from: { id: 456 },
         replyWithMediaGroup: async (group) => {
-          callCount++;
-          if (callCount === 1) {
-            // First attempt fails with IMAGE_PROCESS_FAILED on item 2
-            const err = new Error('Bad Request: failed to send message #2 with the error message "IMAGE_PROCESS_FAILED"');
-            err.description = 'failed to send message #2 with the error message "IMAGE_PROCESS_FAILED"';
-            throw err;
-          }
           sentGroups.push(group);
           return group.map((_, i) => ({ message_id: 100 + i }));
         }
@@ -215,8 +207,15 @@ describe('Download Strategies & Telegram Sender', () => {
       ];
 
       const res = await sendMediaToTelegram(mockCtx, mediaItems, 'caption');
-      assert.ok(res.length >= 2, 'Should send media items as group');
-      assert.equal(sentGroups.length, 1, 'Should send via media group');
+      assert.equal(res.length, 3, 'Should send all media items');
+      assert.equal(sentGroups.length, 1, 'Should send as one media group');
+      // Photos must NOT use file:// protocol (causes IMAGE_PROCESS_FAILED on local Bot API)
+      for (const item of sentGroups[0]) {
+        if (item.type === 'photo') {
+          assert.ok(typeof item.media !== 'string' || !item.media.startsWith('file://'),
+            'Photo media must use multipart upload, not file:// URI');
+        }
+      }
     });
   });
 });

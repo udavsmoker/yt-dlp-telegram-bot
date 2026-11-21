@@ -189,7 +189,7 @@ describe('Download Strategies & Telegram Sender', () => {
       assert.deepEqual(b21.map(b => b.length), [7, 7, 7]);
     });
 
-    it('should use multipart upload (not file://) for photo items in media groups', async () => {
+    it('should use the local Bot API file protocol for photo items in media groups', async () => {
       const sentGroups = [];
       const mockCtx = {
         chat: { id: 123 },
@@ -209,13 +209,37 @@ describe('Download Strategies & Telegram Sender', () => {
       const res = await sendMediaToTelegram(mockCtx, mediaItems, 'caption');
       assert.equal(res.length, 3, 'Should send all media items');
       assert.equal(sentGroups.length, 1, 'Should send as one media group');
-      // Photos must NOT use file:// protocol (causes IMAGE_PROCESS_FAILED on local Bot API)
       for (const item of sentGroups[0]) {
         if (item.type === 'photo') {
-          assert.ok(typeof item.media !== 'string' || !item.media.startsWith('file://'),
-            'Photo media must use multipart upload, not file:// URI');
+          assert.ok(typeof item.media === 'string' && item.media.startsWith('file://'),
+            'Photo media must use the local Bot API file:// protocol');
         }
       }
+    });
+
+    it('should retry a media group after a socket hang up', async () => {
+      let calls = 0;
+      const mockCtx = {
+        chat: { id: 123 },
+        from: { id: 456 },
+        replyWithMediaGroup: async (group) => {
+          calls++;
+          if (calls === 1) {
+            const error = new Error('request to http://localhost:8081/sendMediaGroup failed');
+            error.code = 'ECONNRESET';
+            throw error;
+          }
+          return group.map((_, i) => ({ message_id: 300 + i }));
+        }
+      };
+
+      const mediaItems = [
+        { type: 'photo', path: '/fake/retry-1.jpg' },
+        { type: 'photo', path: '/fake/retry-2.jpg' }
+      ];
+      const res = await sendMediaToTelegram(mockCtx, mediaItems, 'caption');
+      assert.equal(calls, 2);
+      assert.equal(res.length, 2);
     });
   });
 });

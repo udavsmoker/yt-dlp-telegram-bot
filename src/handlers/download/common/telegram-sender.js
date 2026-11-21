@@ -1,6 +1,5 @@
-const { getFileForTelegram, escapeHtml } = require('../../../utils/helpers');
+const { getFileForTelegram, escapeHtml, sanitizePhotoForTelegram } = require('../../../utils/helpers');
 const logger = require('../../../utils/logger');
-const { Input } = require('telegraf');
 
 /**
  * Extract sender name and HTML mention link for user or channel.
@@ -95,6 +94,117 @@ function partitionMediaItems(mediaItems) {
   return batches;
 }
 
+function getTelegramErrorText(error) {
+  return error.description ||
+    error.response?.data?.description ||
+    error.response?.description ||
+    error.message ||
+    '';
+}
+
+function isNetworkError(error, text) {
+  return text.includes('socket hang up') ||
+    text.includes('ECONNRESET') ||
+    text.includes('ETIMEDOUT') ||
+    text.includes('ECONNREFUSED') ||
+    error.code === 'ECONNRESET' ||
+    error.code === 'ECONNREFUSED' ||
+    error.code === 'ETIMEDOUT';
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function buildMediaGroup(items, caption, putCaption, videoMeta) {
+  return items.map((item, index) => ({
+    type: item.type,
+    media: getFileForTelegram(item.path),
+    caption: putCaption && index === 0 ? caption : undefined,
+    parse_mode: putCaption && index === 0 ? 'HTML' : undefined,
+    thumbnail: item.thumbnailPath ? getFileForTelegram(item.thumbnailPath) : undefined,
+    ...(item.type === 'video' ? {
+      supports_streaming: true,
+      width: videoMeta.width,
+      height: videoMeta.height,
+      duration: videoMeta.duration
+    } : {})
+  }));
+}
+
+async function sendMediaGroup(ctx, items, caption, putCaption, videoMeta) {
+  let currentItems = [...items];
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await ctx.replyWithMediaGroup(
+        buildMediaGroup(currentItems, caption, putCaption, videoMeta)
+      );
+    } catch (error) {
+      const text = getTelegramErrorText(error);
+
+      if (text.includes('caption is too long')) {
+        logger.warn('Caption too long for media batch, retrying without caption');
+        return ctx.replyWithMediaGroup(
+          buildMediaGroup(currentItems, undefined, false, videoMeta)
+        );
+      }
+
+      if (/IMAGE_PROCESS_FAILED|IMAGE PROCESS FAILED/i.test(text) && currentItems.length > 1) {
+        const match = text.match(/failed to send message\s*#?(\d+)/i);
+        const failedIndex = match
+          ? Math.max(0, Math.min(currentItems.length - 1, parseInt(match[1], 10) - 1))
+          : currentItems.length - 1;
+        logger.warn(`Telegram could not process photo #${failedIndex + 1}, excluding it from the album`);
+        currentItems.splice(failedIndex, 1);
+        continue;
+      }
+
+      if (isNetworkError(error, text) && attempt < 2) {
+        logger.warn(`Local Telegram Bot API connection dropped (attempt ${attempt + 1}/3), retrying`);
+        await delay(250 * (attempt + 1));
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  if (currentItems.length === 1 && currentItems[0].type === 'photo') {
+    return ctx.replyWithPhoto(getFileForTelegram(currentItems[0].path), {
+      caption: putCaption ? caption : undefined,
+      parse_mode: putCaption ? 'HTML' : undefined
+    });
+  }
+
+  throw new Error('MEDIA_GROUP_SEND_FAILED');
+}
+
+async function sendMediaGroupRecoverably(ctx, items, caption, putCaption, videoMeta) {
+  if (items.length <= 1) return null;
+
+  try {
+    return await sendMediaGroup(ctx, items, caption, putCaption, videoMeta);
+  } catch (error) {
+    const text = getTelegramErrorText(error);
+    if (!isNetworkError(error, text) || items.length <= 2) {
+      throw error;
+    }
+
+    const splitIndex = Math.ceil(items.length / 2);
+    const firstPart = items.slice(0, splitIndex);
+    const secondPart = items.slice(splitIndex);
+    logger.warn(`Splitting ${items.length}-item album after repeated network errors`);
+
+    const sent = [];
+    const first = await sendMediaGroup(ctx, firstPart, caption, false, videoMeta);
+    if (Array.isArray(first)) sent.push(...first);
+    const second = await sendMediaGroup(ctx, secondPart, caption, putCaption, videoMeta);
+    if (Array.isArray(second)) sent.push(...second);
+    return sent;
+  }
+}
+
 /**
  * Send media items (photos and videos) to Telegram in batches of up to 10 items.
  * @param {object} ctx - Telegraf context
@@ -115,11 +225,21 @@ async function sendMediaToTelegram(ctx, mediaItems, caption, videoMeta = {}) {
       const item = batch[0];
       const singleCaption = isLastBatch ? caption : undefined;
       if (item.type === 'photo') {
-        // Use multipart upload for photos to bypass local Bot API image decoder issues
-        const sent = await ctx.replyWithPhoto(Input.fromLocalFile(item.path), {
-          caption: singleCaption,
-          parse_mode: singleCaption ? 'HTML' : undefined
-        });
+        try { await sanitizePhotoForTelegram(item.path); } catch {}
+        let sent;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            sent = await ctx.replyWithPhoto(getFileForTelegram(item.path), {
+              caption: singleCaption,
+              parse_mode: singleCaption ? 'HTML' : undefined
+            });
+            break;
+          } catch (error) {
+            const text = getTelegramErrorText(error);
+            if (!isNetworkError(error, text) || attempt === 2) throw error;
+            await delay(250 * (attempt + 1));
+          }
+        }
         sentMessages.push(sent);
       } else {
         const opts = {
@@ -135,44 +255,20 @@ async function sendMediaToTelegram(ctx, mediaItems, caption, videoMeta = {}) {
         sentMessages.push(sent);
       }
     } else {
-      // Use multipart upload for photos (Input.fromLocalFile) to avoid IMAGE_PROCESS_FAILED
-      // from the local Bot API server's internal image decoder when using file:// protocol.
-      // Videos keep file:// (via getFileForTelegram) since they don't have ICC profile issues.
-      const mediaGroup = batch.map((item, index) => ({
-        type: item.type,
-        media: item.type === 'photo'
-          ? Input.fromLocalFile(item.path)
-          : getFileForTelegram(item.path),
-        caption: isLastBatch && index === 0 ? caption : undefined,
-        parse_mode: isLastBatch && index === 0 ? 'HTML' : undefined,
-        thumbnail: item.thumbnailPath ? getFileForTelegram(item.thumbnailPath) : undefined,
-        ...(item.type === 'video' ? {
-          supports_streaming: true,
-          width: videoMeta.width,
-          height: videoMeta.height,
-          duration: videoMeta.duration
-        } : {})
-      }));
-
-      try {
-        const sent = await ctx.replyWithMediaGroup(mediaGroup);
-        if (Array.isArray(sent)) sentMessages.push(...sent);
-      } catch (sendError) {
-        const errText = sendError.description || sendError.response?.data?.description || sendError.response?.description || sendError.message || '';
-        if (errText.includes('caption is too long')) {
-          logger.warn(`Caption too long for batch ${batchIndex + 1}, retrying without caption`);
-          const fallbackGroup = batch.map(item => ({
-            type: item.type,
-            media: item.type === 'photo'
-              ? Input.fromLocalFile(item.path)
-              : getFileForTelegram(item.path)
-          }));
-          const sent = await ctx.replyWithMediaGroup(fallbackGroup);
-          if (Array.isArray(sent)) sentMessages.push(...sent);
-        } else {
-          throw sendError;
+      for (const item of batch) {
+        if (item.type === 'photo') {
+          try { await sanitizePhotoForTelegram(item.path); } catch {}
         }
       }
+
+      const sent = await sendMediaGroupRecoverably(
+        ctx,
+        batch,
+        caption,
+        isLastBatch,
+        videoMeta
+      );
+      if (Array.isArray(sent)) sentMessages.push(...sent);
     }
     logger.info(`Sent batch ${batchIndex + 1}/${batches.length} (${batch.length} item(s))`);
   }

@@ -95,6 +95,103 @@ class SoundCloudService {
     }
   }
 
+  getEntryThumbnail(entry) {
+    if (entry.thumbnail) return entry.thumbnail;
+    if (!Array.isArray(entry.thumbnails)) return null;
+
+    const thumbnails = entry.thumbnails
+      .filter(item => item && typeof item.url === 'string')
+      .sort((a, b) => {
+        const areaA = (Number(a.width) || 0) * (Number(a.height) || 0);
+        const areaB = (Number(b.width) || 0) * (Number(b.height) || 0);
+        return areaB - areaA;
+      });
+    return thumbnails[0]?.url || null;
+  }
+
+  normalizePlaylistTrack(entry, fallbackSet, index) {
+    const trackUrl = entry.webpage_url ||
+      entry.url ||
+      (entry.id ? `https://api.soundcloud.com/tracks/${entry.id}` : null);
+    const title = typeof entry.title === 'string' && entry.title.trim()
+      ? entry.title.trim()
+      : `Track ${index + 1}`;
+    const artist = entry.uploader ||
+      entry.artist ||
+      entry.creator ||
+      fallbackSet.uploader ||
+      fallbackSet.artist ||
+      'SoundCloud Artist';
+
+    return {
+      index: index + 1,
+      id: String(entry.id || `sc_${index + 1}`),
+      title,
+      artist,
+      album: entry.album || fallbackSet.title || 'SoundCloud Set',
+      duration: typeof entry.duration === 'number' ? entry.duration : 0,
+      url: trackUrl,
+      thumbnail: this.getEntryThumbnail(entry)
+    };
+  }
+
+  async resolvePlaylistTracks(entries, fallbackSet, options = {}) {
+    const initialTracks = entries.map((entry, index) =>
+      this.normalizePlaylistTrack(entry, fallbackSet, index)
+    );
+
+    const concurrency = 4;
+    let cursor = 0;
+
+    const resolveOne = async (trackIndex) => {
+      if (options.signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
+
+      const entry = entries[trackIndex];
+      const track = initialTracks[trackIndex];
+      const needsResolution = !entry.title ||
+        /^(?:Track\s+\d+|.+(?:-|\]\s*)\s*Track\s+\d+)$/i.test(track.title) ||
+        !track.artist ||
+        track.artist === 'SoundCloud Artist' ||
+        !track.thumbnail ||
+        !track.duration;
+
+      if (!needsResolution || !track.url) return track;
+
+      try {
+        const resolved = await this.getMetadata(track.url, options);
+        if (resolved.type !== 'track') return track;
+
+        return {
+          ...track,
+          id: resolved.id || track.id,
+          title: resolved.title || track.title,
+          artist: resolved.artist || track.artist,
+          album: resolved.album || track.album,
+          duration: resolved.duration || track.duration,
+          url: resolved.url || track.url,
+          thumbnail: resolved.thumbnail || track.thumbnail
+        };
+      } catch (err) {
+        if (options.signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
+        logger.warn(`Could not resolve SoundCloud playlist track #${trackIndex + 1}: ${err.message}`);
+        return track;
+      }
+    };
+
+    const worker = async () => {
+      while (cursor < initialTracks.length) {
+        const trackIndex = cursor++;
+        initialTracks[trackIndex] = await resolveOne(trackIndex);
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, initialTracks.length) }, () => worker())
+    );
+
+    return initialTracks;
+  }
+
   /**
    * Extract comprehensive metadata for a SoundCloud track or set directly via yt-dlp.
    * @param {string} url
@@ -109,8 +206,7 @@ class SoundCloudService {
     try {
       logger.info(`Fetching SoundCloud metadata: ${url}`);
       const raw = await youtubedl(url, {
-        dumpSingleJson: true,
-        flatPlaylist: true
+        dumpSingleJson: true
       }, options.signal ? { signal: options.signal } : {});
 
       if (!raw) {
@@ -121,19 +217,7 @@ class SoundCloudService {
 
       if (isPlaylist) {
         const rawEntries = Array.isArray(raw.entries) ? raw.entries : [];
-        const tracks = rawEntries.map((entry, index) => {
-          const trackUrl = entry.url || entry.webpage_url || (entry.id ? `https://api.soundcloud.com/tracks/${entry.id}` : null);
-          return {
-            index: index + 1,
-            id: String(entry.id || `sc_${index + 1}`),
-            title: entry.title || `Track ${index + 1}`,
-            artist: entry.uploader || entry.artist || raw.uploader || 'SoundCloud Artist',
-            album: entry.album || raw.title || 'SoundCloud Set',
-            duration: typeof entry.duration === 'number' ? entry.duration : 0,
-            url: trackUrl,
-            thumbnail: entry.thumbnail || raw.thumbnail || null
-          };
-        });
+        const tracks = await this.resolvePlaylistTracks(rawEntries, raw, options);
 
         return {
           type: 'set',
@@ -199,6 +283,34 @@ class SoundCloudService {
 
     if (!meta) {
       meta = await this.getMetadata(targetUrl, options);
+    }
+    else if (
+      targetUrl &&
+      (/^Track\s+\d+$/i.test(meta.title) ||
+        /(?:-|\]\s*)\s*Track\s+\d+\s*$/i.test(meta.title) ||
+        !meta.artist ||
+        meta.artist === 'SoundCloud Artist' ||
+        !meta.thumbnail ||
+        meta.album === 'SoundCloud Set')
+    ) {
+      try {
+        const resolved = await this.getMetadata(targetUrl, options);
+        if (resolved.type === 'track') {
+          meta = {
+            ...meta,
+            id: resolved.id || meta.id,
+            title: resolved.title || meta.title,
+            artist: resolved.artist || meta.artist,
+            album: resolved.album || meta.album,
+            duration: resolved.duration || meta.duration,
+            thumbnail: resolved.thumbnail || meta.thumbnail,
+            url: resolved.url || targetUrl
+          };
+        }
+      } catch (err) {
+        if (options.signal?.aborted) throw new Error('DOWNLOAD_CANCELLED');
+        logger.warn(`Could not enrich SoundCloud track metadata for "${meta.title}": ${err.message}`);
+      }
     }
 
     const safeId = (meta.id || Date.now()).toString().replace(/[^a-zA-Z0-9_-]/g, '_');

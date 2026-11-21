@@ -60,6 +60,44 @@ describe('SoundCloud Service & Strategy', () => {
     });
   });
 
+  describe('SoundCloud playlist metadata normalization', () => {
+    it('should prefer entry metadata and the highest-resolution artwork', () => {
+      const track = soundcloudService.normalizePlaylistTrack({
+        id: '123',
+        title: 'Real Track Title',
+        uploader: 'Real Artist',
+        duration: 187,
+        webpage_url: 'https://soundcloud.com/real/track',
+        thumbnails: [
+          { url: 'https://i1.sndcdn.com/small.jpg', width: 100, height: 100 },
+          { url: 'https://i1.sndcdn.com/large.jpg', width: 500, height: 500 }
+        ]
+      }, {
+        title: 'Set Title',
+        uploader: 'Set Artist'
+      }, 0);
+
+      assert.equal(track.title, 'Real Track Title');
+      assert.equal(track.artist, 'Real Artist');
+      assert.equal(track.album, 'Set Title');
+      assert.equal(track.duration, 187);
+      assert.equal(track.url, 'https://soundcloud.com/real/track');
+      assert.equal(track.thumbnail, 'https://i1.sndcdn.com/large.jpg');
+    });
+
+    it('should provide stable fallbacks for incomplete playlist entries', () => {
+      const track = soundcloudService.normalizePlaylistTrack({}, {
+        title: 'Set Title',
+        uploader: 'Set Artist'
+      }, 4);
+
+      assert.equal(track.title, 'Track 5');
+      assert.equal(track.artist, 'Set Artist');
+      assert.equal(track.album, 'Set Title');
+      assert.equal(track.url, null);
+    });
+  });
+
   describe('SoundCloudStrategy lifecycle & prompts', () => {
     it('should route SoundCloud URLs via canHandle', () => {
       const strategy = new SoundCloudStrategy();
